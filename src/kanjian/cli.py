@@ -32,6 +32,12 @@ class Read:
 
     def __init__(self, window: Node, focused: Node | None, focus_elsewhere: bool = False, truncated_at: int | None = None):
         self.window, self.focused, self.focus_elsewhere, self.truncated_at = window, focused, focus_elsewhere, truncated_at
+        self.focus_outside_page = False
+        page = window.children[0] if len(window.children) == 1 and window.children[0].role == "document" else None
+        if focused and page and page.bbox and focused.bbox:
+            x, y, w, h = page.bbox
+            fx, fy = focused.bbox[0] + focused.bbox[2] / 2, focused.bbox[1] + focused.bbox[3] / 2
+            self.focus_outside_page = not (x <= fx <= x + w and y <= fy <= y + h)
 
 
 def read_window(args) -> Read:
@@ -106,7 +112,8 @@ def print_issues(issues: list[Issue], fmt: str, window: str) -> None:
 
 def cmd_screen(args) -> int:
     r = read_window(args)
-    lines = summarize(r.window, r.focused, lang=args.lang, focus_elsewhere=r.focus_elsewhere, truncated_at=r.truncated_at)
+    lines = summarize(r.window, r.focused, lang=args.lang, focus_elsewhere=r.focus_elsewhere, truncated_at=r.truncated_at,
+                      focus_outside_page=r.focus_outside_page)
     if args.json:
         print(json.dumps({"window": r.window.to_dict(), "focused": r.focused.to_dict() if r.focused else None}, ensure_ascii=False))
         return 0

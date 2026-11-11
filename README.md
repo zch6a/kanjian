@@ -21,7 +21,10 @@ local by default, and an accessibility audit for the developers who build those 
 - **What is in this window?** `kanjian screen` gives the window, where the focus is, how many
   headings, buttons and fields there are, and the controls in reading order, said the way a screen
   reader says them. It reads the window's accessibility tree, the same one NVDA and Narrator read, so
-  it is exact and needs no model.
+  it is exact and needs no model. A table is read as its size, columns and first row ("Prices, table,
+  2 rows, columns: Tool, Size, Price; first row: Spade, Large, 25.00"), a paragraph with a link as one
+  sentence, and a control with no name with the nearest named one as a landmark ("unlabeled button,
+  near 'Favourite'").
 - **What does this picture show?** `kanjian describe` asks a vision model about an image file, the
   clipboard, or a window. The model is told it is describing for a blind listener: the main point
   first, any text read exactly, no guessing about people.
@@ -82,7 +85,7 @@ on many keyboards; `--keys win+alt` and so on to change it):
 | Hotkey | |
 |---|---|
 | Ctrl+Shift+Alt+S | overview of the window in front, one line at a time |
-| Ctrl+Shift+Alt+F | the focused control in full: name, role, value, states, description |
+| Ctrl+Shift+Alt+F | the focused control in full: name, role, value, states, description. If it has no name and a vision model is set up, a guess at its purpose from its picture (only that control is sent) |
 | Ctrl+Shift+Alt+D | describe the window in front with the vision model |
 | Ctrl+Shift+Alt+X | stop speaking |
 | Ctrl+Shift+Alt+Q | quit (Ctrl+C in its terminal works too) |

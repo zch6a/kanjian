@@ -51,8 +51,9 @@ def _automation():
 
 P_BOUNDS, P_HWND = 30001, 30020
 P_TOGGLE_AVAILABLE = 30041  # without it, the toggle state of a plain button reads as 2, "indeterminate"
+P_ARIA_ROLE = 30101  # a web page's own role: Edge reports <th> as a plain data item, but its ARIA role says "columnheader"
 PROPERTIES = (P_NAME, P_CONTROL_TYPE, P_ENABLED, P_OFFSCREEN, P_FOCUS, P_HELP, P_AUTOMATION_ID, P_REQUIRED,
-              P_VALUE, P_READONLY, P_TOGGLE, P_TOGGLE_AVAILABLE, P_EXPAND, P_SELECTED, P_HEADING_LEVEL, P_BOUNDS)
+              P_VALUE, P_READONLY, P_TOGGLE, P_TOGGLE_AVAILABLE, P_EXPAND, P_SELECTED, P_HEADING_LEVEL, P_BOUNDS, P_ARIA_ROLE)
 TREE_SCOPE_SUBTREE = 7  # the element, its children and all descendants
 
 
@@ -204,6 +205,8 @@ class Reader:
         value = get(P_VALUE, "") or ""
         if role == "edit" and get(P_READONLY, False):
             states.add("readonly")
+        if str(get(P_ARIA_ROLE, "") or "").lower() in ("columnheader", "rowheader"):
+            role = "headeritem"
         level = None
         heading = get(P_HEADING_LEVEL, 0)
         if isinstance(heading, int) and HEADING_1 <= heading <= HEADING_1 + 8:

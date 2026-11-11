@@ -74,3 +74,24 @@ A new user's first run, and a blind review by a fresh agent. The agent made its 
 - **Test harness**: the test window's 64-bit module handle was cut to 32 bits, which caused an access-violation dump on every run. Fixed.
 - **Patching rule** (from a mistake in livesub): each replacement must match exactly once, so that no code lands in the wrong class.
 - 58 tests, ruff clean.
+
+## Round 2
+
+Real use, the way a blind user would meet it. kanjian read two windows made for the purpose:
+- a WinForms order form (labels and fields, a drop-down, a check box, radio buttons in a group box, a picture, an icon-only button, a link, a data grid, two tabs);
+- an HTML page in a throwaway Edge profile (navigation, headings that skip a level, images with and without alt text, a paragraph with a "click here" link, a table, a labelled number field, a toggle button and an icon-only button).
+
+Each output was judged as a screen reader user would: most important first, nothing said twice, nothing that means nothing. Both test windows were closed afterwards, and only the throwaway Edge profile's processes were stopped.
+
+- **Tables were the framework's internals.** "DataGridView, table, 4 items: 首行, 行 0, 行 1, 行 2" (Windows localizes "Top Row", "Row 0"). Tables are now read as "table, 3 rows, columns: Item, Quantity, Price; first row: Tea, 2, 4.00". Edge reports `<th>` cells as plain data items, so header cells are also recognized by the page's ARIA role (`columnheader`, `rowheader`), which UIA exposes. A table named after its class ("DataGridView") is an audit warning.
+- **The browser's own placeholder counted as alt text.** Edge names an image without alt "要获取缺失的图片说明，请打开上下文菜单。" ("To get missing image descriptions, open the context menu."), so the audit missed it. Browser placeholders are now treated as no name.
+- **A paragraph with a link was three lines** ("…returns policy," / "click here, link" / "."). Text and links on one line are now read as one sentence: "…returns policy, click here (link)." A row of links alone stays a list of links.
+- **Unlabeled controls get a landmark**: "unlabeled button, near 'Favourite'", from the nearest named control within 400 px, never the page or a group. In `watch`, Ctrl+Shift+Alt+F on a control with no name also asks the vision model for a guess, sending only that control's pixels, cut from the window's picture: "Probably: Settings (a guess from its picture)."
+- **Label colons** are not read ("Name, edit", not "Name:, edit").
+- **The page itself was listed as a control** ("kanjian test page, document"). It is not; the window line names it.
+- **A focus outside the page** (Edge's sync bubble had it) is said to be: "Focus (outside the page): …".
+- **Audit false positives:**
+  - A combo box's drop-down arrow was flagged as a small target. Parts of compound controls (combo, spin box, slider, split button, scroll bar) are no longer separate targets.
+  - An icon inside an unlabeled button was reported again as an image without a description; the button's error covers it.
+- **CI found a real gap.** GitHub's Windows runners have no audio device, and speaking raised a COM error (`0x8004503A`). On a PC without working audio that would have crashed kanjian. Speech now falls back to printing, once saying why, and the speech-timing test skips where there is no audio device.
+- 71 tests, ruff clean.

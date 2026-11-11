@@ -145,3 +145,15 @@ def capture_window(hwnd: int):
         gdi32.DeleteDC(memory_dc)
         user32.ReleaseDC(hwnd, window_dc)
     return Image.frombuffer("RGB", (w, h), pixels.raw, "raw", "BGRX", 0, 1)
+
+
+def capture_control(hwnd: int, bbox: tuple[int, int, int, int], margin: int = 6):
+    """The pixels of one control (screen coordinates from UI Automation), cut from a picture of its
+    window, with a small margin: what a vision model needs to guess an unlabeled button's purpose."""
+    image = capture_window(hwnd)
+    left, top, _, _ = window_rect(hwnd)
+    x, y, w, h = bbox
+    box = (max(0, x - left - margin), max(0, y - top - margin), min(image.width, x - left + w + margin), min(image.height, y - top + h + margin))
+    if box[2] <= box[0] or box[3] <= box[1]:
+        raise RuntimeError("the control is outside its window")
+    return image.crop(box)

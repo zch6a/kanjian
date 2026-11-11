@@ -27,10 +27,10 @@ ACTIONS = {1: ("S", "summary"), 2: ("F", "focus"), 3: ("D", "describe"), 4: ("X"
 WORDS = {
     "en": {"no_focus": "Nothing has the focus.", "no_vision": "No vision model is set up; see kanjian describe --help.",
            "looking": "Looking...", "ready": "kanjian is ready. {keys} and S for an overview, F for the focus, D to describe, X to stop speaking, Q to quit.",
-           "bye": "kanjian stopped.", "failed": "That did not work: {e}"},
+           "bye": "kanjian stopped.", "failed": "That did not work: {e}", "guess": "Probably: {label} (a guess from its picture)."},
     "zh": {"no_focus": "没有元素获得焦点。", "no_vision": "还没有配置视觉模型，见 kanjian describe --help。",
            "looking": "正在看……", "ready": "kanjian 已就绪。{keys} 加 S 概览，F 读焦点，D 描述画面，X 停止朗读，Q 退出。",
-           "bye": "kanjian 已停止。", "failed": "没能完成：{e}"},
+           "bye": "kanjian 已停止。", "failed": "没能完成：{e}", "guess": "可能是：{label}（根据外观猜测）。"},
 }
 
 
@@ -55,6 +55,7 @@ class Actions:
     describe_foreground: Callable[[], str] | None
     read_focus: Callable[[], Node | None] | None = None  # the focus alone, without reading the whole window
     silence: Callable[[], None] | None = None
+    guess_label: Callable[[Node], str] | None = None  # for a focused control with no name: ask the vision model
     lang: str = "en"
 
     def _lines(self, lines: list[str]) -> None:
@@ -79,6 +80,8 @@ class Actions:
             elif action == "focus":
                 focused = self.read_focus() if self.read_focus else self.read_foreground()[1]
                 self.say(focus_detail(focused, self.lang) if focused else w["no_focus"])
+                if focused and not focused.name.strip() and self.guess_label and focused.bbox:
+                    self.say(w["guess"].format(label=self.guess_label(focused)), interrupt=False)
             elif action == "describe":
                 if self.describe_foreground is None:
                     self.say(w["no_vision"])
@@ -131,8 +134,16 @@ def run(args) -> int:
     def read_focus():
         return reader.focus_in(foreground_window())
 
+    guess = None
+    if describe is not None:
+        from .windows import capture_control
+
+        def guess(node):
+            # Only the control's own pixels go to the model, cut from a picture of its window.
+            return vision.describe(capture_control(foreground_window(), node.bbox), task="control")
+
     actions = Actions(say=out.say, read_foreground=lambda: reader.foreground(), describe_foreground=describe,
-                      read_focus=read_focus, silence=out.stop, lang=args.lang)
+                      read_focus=read_focus, silence=out.stop, guess_label=guess, lang=args.lang)
     user32 = ctypes.windll.user32
     registered = []
     for hid, (key, _) in ACTIONS.items():

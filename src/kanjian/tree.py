@@ -21,6 +21,11 @@ INTERACTIVE = {"button", "link", "checkbox", "radio", "combobox", "edit", "menui
 CONTAINERS = {"pane", "group", "custom", "unknown", "window"}
 GENERIC_NAMES = {"button", "image", "icon", "link", "click", "click here", "here", "more", "picture", "graphic",
                  "untitled", "control", "item", "图片", "图像", "按钮", "链接", "点击", "这里", "更多"}
+CLASS_NAMES = {"datagridview", "listview", "treeview", "listbox", "panel", "groupbox", "picturebox", "tablelayoutpanel",
+               "flowlayoutpanel", "richtextbox", "textbox", "combobox", "grid", "table", "tablix"}  # framework defaults, not names
+# What browsers put in place of a missing alt text: not a name, and the image has none.
+PLACEHOLDER_NAMES = {"要获取缺失的图片说明，请打开上下文菜单。", "to get missing image descriptions, open the context menu.",
+                     "unlabeled graphic", "unlabelled graphic", "未加标签的图形"}
 FILE_NAME = re.compile(r"^[\w\-. ]+\.(png|jpe?g|gif|svg|webp|bmp|ico)$", re.I)
 
 
@@ -41,6 +46,10 @@ class Node:
         yield self, path
         for c in self.children:
             yield from c.walk(path + (self,))
+
+    def __post_init__(self) -> None:
+        if self.name.strip().lower() in PLACEHOLDER_NAMES:
+            self.name = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> Node:
@@ -112,7 +121,7 @@ def speak_node(n: Node, lang: str = "en") -> str:
     if n.role == "heading" and n.level:
         role = f"{role} {text['level'].format(n=n.level)}"
     if n.name.strip():
-        parts = [n.name.strip(), role]
+        parts = [n.name.strip().rstrip(":：").rstrip() or n.name.strip(), role]  # "Name, edit", not "Name:, edit"
     else:  # "unlabeled button", "无标签的按钮"
         parts = [f"{text['unlabeled']}{'' if lang == 'zh' else ' '}{role}".strip()]
     if n.value and n.value != n.name and n.role in ("edit", "combobox", "slider", "spinner", "progressbar"):
@@ -166,7 +175,7 @@ def flatten(root: Node) -> list[Node]:
         if n.role in ("list", "tree", "table") and n.children:
             out.append(n)  # the container stands for its items; see summarize
             return
-        if _meaningful(n) and n is not root:
+        if _meaningful(n) and n is not root and n.role != "document":  # the page: the window line names it
             out.append(n)
             if n.role in INTERACTIVE and n.role not in ("listitem", "treeitem"):
                 return  # a button's inner text is its name already
@@ -181,15 +190,46 @@ def flatten(root: Node) -> list[Node]:
                     and _label_text(x.name) and _label_text(x.name) == _label_text(out[i + 1].name))]
 
 
+def _same_line(a: Node, b: Node) -> bool:
+    if not a.bbox or not b.bbox:
+        return False
+    top, bottom = max(a.bbox[1], b.bbox[1]), min(a.bbox[1] + a.bbox[3], b.bbox[1] + b.bbox[3])
+    return bottom - top > min(a.bbox[3], b.bbox[3]) / 2
+
+
+def _inline_runs(items: list[Node]) -> list[list[Node]]:
+    """Text and links that run on in one line of a paragraph, kept together: "To read our returns
+    policy, click here (link)." rather than three lines for one sentence."""
+    runs: list[list[Node]] = []
+    for n in items:
+        inline = n.role in ("text", "link", "hyperlink")
+        if runs and inline and runs[-1][-1].role in ("text", "link", "hyperlink") and _same_line(runs[-1][-1], n) \
+                and any(x.role == "text" for x in (*runs[-1], n)):
+            runs[-1].append(n)
+        else:
+            runs.append([n])
+    return runs
+
+
+def _say_run(run: list[Node], lang: str) -> str:
+    if len(run) == 1:
+        return ""
+    word = ROLE_WORDS[lang]["link"]
+    parts = [x.name.strip() if x.role == "text" else (f"{x.name.strip()}（{word}）" if lang == "zh" else f"{x.name.strip()} ({word})") for x in run]
+    text = " ".join(p for p in parts if p)
+    return re.sub(r"\s+([.,;:!?。，；：！？])", r"\1", text)
+
+
 def summarize(window: Node, focused: Node | None = None, *, lang: str = "en", max_items: int = 40,
-              focus_elsewhere: bool = False, truncated_at: int | None = None) -> list[str]:
+              focus_elsewhere: bool = False, truncated_at: int | None = None, focus_outside_page: bool = False) -> list[str]:
     """Lines to read out, most useful first. `focus_elsewhere`: there is a focus, outside this window.
     `truncated_at`: the tree was cut short after that many elements."""
     text = TEXT[lang]
     sep = "：" if lang == "zh" else ": "
     lines = [f"{text['window']}{sep}{window.name or text['unlabeled']}"]
     if focused:
-        lines.append(f"{text['focus']}{sep}{speak_node(focused, lang)}")
+        where = ("（在网页之外）" if lang == "zh" else " (outside the page)") if focus_outside_page else ""
+        lines.append(f"{text['focus']}{where}{sep}{speak_node(focused, lang)}")
     else:
         lines.append(text["elsewhere"] if focus_elsewhere else text["nothing_focused"])
     if truncated_at:
@@ -209,14 +249,70 @@ def summarize(window: Node, focused: Node | None = None, *, lang: str = "en", ma
     rest = [n for n in items if n.role != "heading"]
     if rest:
         lines.append(text["controls"] + sep)
-        for n in rest[:max_items]:
-            lines.append("  " + _with_items(n, lang))
-        if len(rest) > max_items:
-            lines.append("  " + text["more"].format(n=len(rest) - max_items))
+        runs = _inline_runs(rest)
+        for run in runs[:max_items]:
+            if len(run) > 1:
+                lines.append("  " + _say_run(run, lang))
+                continue
+            n = run[0]
+            line = _with_items(n, lang)
+            if n.role in INTERACTIVE and not n.name.strip():
+                landmark = _nearest_named(n, items)
+                if landmark:
+                    line += (f"，在“{landmark}”旁边" if lang == "zh" else f", near '{landmark}'")
+            lines.append("  " + line)
+        if len(runs) > max_items:
+            lines.append("  " + text["more"].format(n=len(runs) - max_items))
     return lines
 
 
+def _nearest_named(n: Node, items: list[Node], within: int = 400) -> str | None:
+    """The closest element with a name, as a landmark for one without ("unlabeled button, near 'Name'")."""
+    if not n.bbox:
+        return None
+    cx, cy = n.bbox[0] + n.bbox[2] / 2, n.bbox[1] + n.bbox[3] / 2
+    best, dist = None, within * within
+    for o in items:
+        if o is n or not o.bbox or not o.name.strip() or o.role in ("window", "tabitem", "document", "group", "dialog", "pane"):
+            continue
+        ox, oy = o.bbox[0] + o.bbox[2] / 2, o.bbox[1] + o.bbox[3] / 2
+        d = (ox - cx) ** 2 + (oy - cy) ** 2
+        if d < dist:
+            best, dist = o.name.strip().rstrip(":：").rstrip(), d
+    return best
+
+
+HEADER_ROLES = ("header", "headeritem")
+
+
+def _table(n: Node, lang: str) -> str:
+    """"Orders, table, 3 rows, columns: Item, Quantity, Price; first row: Tea, 2, 4.00": what a listener
+    needs before going into a table, instead of the framework's row names."""
+    sep = "，" if lang == "zh" else ", "
+    rows = [r for r in n.children if r.children]
+    header = next((r for r in rows if r.children and all(c.role in HEADER_ROLES for c in r.children)), None)
+    columns = []
+    if header:
+        cells = [(c.value or c.name).strip() for c in header.children]
+        # The top-left corner cell has no text of its own (only a name such as "Top Left Header Cell").
+        valued = [c for c in header.children if c.value.strip()]
+        columns = [(c.value or c.name).strip() for c in valued] if valued else [x for x in cells if x]
+    data = [r for r in rows if r is not header]
+    head = speak_node(n, lang)
+    parts = [head, f"{len(data)} 行" if lang == "zh" else f"{len(data)} {'row' if len(data) == 1 else 'rows'}"]
+    out = sep.join(parts)
+    if columns:
+        out += ("，列：" if lang == "zh" else ", columns: ") + sep.join(columns)
+    if data:
+        first = [c.value.strip() or c.name.strip() for c in data[0].children if c.role not in HEADER_ROLES]
+        if any(first):
+            out += ("；第一行：" if lang == "zh" else "; first row: ") + sep.join(x for x in first if x)
+    return out
+
+
 def _with_items(n: Node, lang: str) -> str:
+    if n.role == "table" and any(r.children for r in n.children):
+        return _table(n, lang)
     if n.role not in ("list", "tree", "table"):
         return speak_node(n, lang)
     kids = n.children  # all of them: a long list shows only some at a time, the rest are scrolled away
@@ -303,8 +399,12 @@ def audit(root: Node, *, min_target: int = 24) -> list[Issue]:
     size in pixels (WCAG 2.2, 2.5.8: 24 by 24)."""
     issues: list[Issue] = []
     last_level = 0
+    # A combo box's drop-down arrow or a spin box's arrows are parts of one control, not targets of
+    # their own (they were flagged as too small on a plain WinForms combo box).
+    compound = ("combobox", "spinner", "slider", "splitbutton", "scrollbar")
     targets = [n for n, p in root.walk() if n.role in INTERACTIVE and n.bbox and n.bbox[2] > 0 and n.bbox[3] > 0
-               and not ({"disabled", "offscreen"} & n.states) and not any("offscreen" in a.states for a in p)]
+               and not ({"disabled", "offscreen"} & n.states) and not any("offscreen" in a.states for a in p)
+               and not any(a.role in compound for a in p)]
     for n, path in root.walk():
         if "offscreen" in n.states or any("offscreen" in p.states for p in path):
             continue
@@ -312,8 +412,11 @@ def audit(root: Node, *, min_target: int = 24) -> list[Issue]:
         where = _path(path, n)
         if n.role in INTERACTIVE and not name:
             issues.append(Issue("error", "no-name", where, f"this {ROLE_WORDS['en'].get(n.role, n.role)} has no accessible name: a screen reader can only say \"{ROLE_WORDS['en'].get(n.role, n.role)}\""))
-        elif n.role == "image" and not name and not n.description:
+        elif n.role == "image" and not name and not n.description and not any(a.role in INTERACTIVE for a in path):
+            # (an icon inside a button is the button's business: its missing name is reported there)
             issues.append(Issue("warning", "image-no-description", where, "image with no description (if it is decorative, it should be hidden from assistive technology)"))
+        elif name and n.role in ("table", "list", "tree") and name.lower().replace(" ", "") in CLASS_NAMES:
+            issues.append(Issue("warning", "meaningless-name", where, f"the name \"{name}\" is the control's class, not what it holds"))
         elif name and (name.lower() in GENERIC_NAMES or FILE_NAME.match(name)) and (n.role in INTERACTIVE or n.role == "image"):
             issues.append(Issue("warning", "meaningless-name", where, f"the name \"{name}\" does not say what this does or shows"))
         if n in targets and _small_and_crowded(n, targets, min_target):

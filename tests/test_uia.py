@@ -109,3 +109,20 @@ def test_a_minimized_window_is_refused():
             capture_window(w.hwnd)
     finally:
         w.close()
+
+
+def test_a_control_is_cut_out_of_its_window():
+    from kanjian.windows import capture_control, set_dpi_aware, window_rect
+    from win32window import TestWindow
+
+    set_dpi_aware()
+    w = TestWindow("kanjian crop", color=(0, 0, 210))
+    try:
+        time.sleep(0.4)
+        left, top, right, bottom = window_rect(w.hwnd)
+        img = capture_control(w.hwnd, (left + 100, top + 100, 40, 30), margin=0)
+        assert img.size == (40, 30)
+        r, g, b = img.getpixel((20, 15))
+        assert b > 150 and r < 80, "a piece of the blue window"
+    finally:
+        w.close()

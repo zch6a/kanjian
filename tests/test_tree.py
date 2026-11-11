@@ -149,3 +149,83 @@ def test_audit_paths_skip_nameless_panes_and_plurals_are_right():
     assert issue.path == "window 'App' > group 'Account' > button"
     dup = n("window", "W", [n("group", "", [n("checkbox", "Same"), n("checkbox", "Same")])])
     assert "2 check boxes named" in [i for i in audit(dup) if i.rule == "duplicate-name"][0].message
+
+
+GRID = n("table", "DataGridView", [
+    n("custom", "Top Row", [n("header", "Top Left Header Cell"), n("header", "Item", value="Item"),
+                            n("header", "Quantity", value="Quantity"), n("header", "Price", value="Price")]),
+    *[n("custom", f"Row {i}", [n("header", f"Row {i}"), n("dataitem", f"Item Row {i}", value=item),
+                               n("dataitem", f"Quantity Row {i}", value=q), n("dataitem", f"Price Row {i}", value=p)])
+      for i, (item, q, p) in enumerate([("Tea", "2", "4.00"), ("Cups", "6", "12.50"), ("Kettle", "1", "30.00")])],
+])
+
+
+def test_a_table_is_read_as_rows_columns_and_its_first_row():
+    lines = summarize(n("window", "Order", [GRID]))
+    assert "  DataGridView, table, 3 rows, columns: Item, Quantity, Price; first row: Tea, 2, 4.00" in lines
+    zh = summarize(n("window", "订单", [GRID]), lang="zh")
+    assert any("3 行，列：Item，Quantity，Price；第一行：Tea，2，4.00" in x for x in zh)
+
+
+def test_a_table_named_after_its_class_is_flagged():
+    issues = audit(n("window", "Order", [GRID]))
+    assert any(i.rule == "meaningless-name" and "class" in i.message for i in issues)
+
+
+def test_label_colons_are_not_read_and_unlabeled_controls_get_a_landmark():
+    w = n("window", "W", [n("edit", "Name:", bbox=(90, 12, 200, 20)), n("button", "", bbox=(300, 10, 32, 32)),
+                          n("button", "Far away", bbox=(900, 900, 80, 30))])
+    lines = [x.strip() for x in summarize(w)]
+    assert "Name, edit" in lines
+    assert "unlabeled button, near 'Name'" in lines
+    zh = [x.strip() for x in summarize(w, lang="zh")]
+    assert "无标签的按钮，在“Name”旁边" in zh
+
+
+def test_the_parts_of_a_combo_box_are_not_separate_targets():
+    w = n("window", "W", [n("combobox", "Country", bbox=(90, 72, 200, 27), children=[n("button", "Open", bbox=(267, 72, 23, 27))]),
+                          n("edit", "City", bbox=(90, 100, 200, 22))])
+    assert not [i for i in audit(w) if i.rule == "small-target"]
+
+
+def test_a_browser_placeholder_is_not_a_name():
+    img = n("image", "要获取缺失的图片说明，请打开上下文菜单。")
+    assert img.name == ""
+    assert any(i.rule == "image-no-description" for i in audit(n("window", "Page", [img])))
+    assert Node.from_dict({"role": "image", "name": "To get missing image descriptions, open the context menu."}).name == ""
+
+
+def test_a_paragraph_with_a_link_reads_as_one_sentence():
+    w = n("window", "Page", [
+        n("text", "Sturdy spades. To read our returns policy,", bbox=(60, 600, 400, 20)),
+        n("link", "click here", bbox=(462, 600, 70, 20)),
+        n("text", ".", bbox=(532, 600, 4, 20)),
+        n("link", "Home", bbox=(60, 700, 50, 20)),
+        n("link", "Shop", bbox=(120, 700, 50, 20)),  # a row of links alone stays a list of links
+    ])
+    lines = [x.strip() for x in summarize(w)]
+    assert "Sturdy spades. To read our returns policy, click here (link)." in lines
+    assert "Home, link" in lines and "Shop, link" in lines
+
+
+def test_html_header_cells_name_the_columns():
+    table = n("table", "Prices", [
+        n("text", "Prices"),
+        n("dataitem", "", [n("headeritem", "Tool"), n("headeritem", "Size"), n("headeritem", "Price")]),
+        n("dataitem", "", [n("dataitem", "Spade"), n("dataitem", "Large"), n("dataitem", "25.00")]),
+        n("dataitem", "", [n("dataitem", "Trowel"), n("dataitem", "Small"), n("dataitem", "8.50")]),
+    ])
+    assert "  Prices, table, 2 rows, columns: Tool, Size, Price; first row: Spade, Large, 25.00" in summarize(n("window", "Page", [table]))
+
+
+def test_landmarks_are_never_the_page_or_a_group():
+    w = n("window", "W", [n("document", "Shop", bbox=(0, 0, 1000, 800), children=[
+        n("group", "Main", bbox=(0, 0, 1000, 40)), n("button", "", bbox=(500, 400, 20, 20)), n("button", "Buy", bbox=(540, 400, 60, 30))])])
+    assert "unlabeled button, near 'Buy'" in [x.strip() for x in summarize(w)]
+
+
+def test_the_page_is_not_a_control_and_an_icon_in_a_button_is_not_reported_twice():
+    w = n("window", "Shop", [n("document", "Shop", [n("button", "", children=[n("image", "")])])])
+    assert "Shop, document" not in [x.strip() for x in summarize(w)]
+    rules = [i.rule for i in audit(w)]
+    assert rules == ["no-name"]

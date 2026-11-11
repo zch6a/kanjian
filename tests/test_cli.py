@@ -206,3 +206,28 @@ def test_window_by_title_finds_the_focus_inside_it(capsys):
         assert "Nothing has the focus." not in out  # either the focus inside it, or "in another window"
     finally:
         w.close()
+
+
+def test_a_focus_outside_the_page_is_said_to_be(tmp_path, capsys):
+    browser = {"window": {"role": "window", "name": "Shop - Browser", "children": [
+        {"role": "toolbar", "name": "App bar", "bbox": [0, 0, 1200, 60], "children": [{"role": "button", "name": "Sync", "bbox": [1100, 10, 40, 40]}]},
+        {"role": "document", "name": "Shop", "bbox": [0, 80, 1200, 800], "children": [{"role": "button", "name": "Buy", "bbox": [10, 100, 60, 30]}]}]},
+        "focused": {"role": "button", "name": "Sync", "bbox": [1100, 10, 40, 40]}}
+    p = tmp_path / "b.json"
+    p.write_text(json.dumps(browser), encoding="utf-8")
+    assert cli.main(["screen", "--tree", str(p)]) == 0
+    assert "Focus (outside the page): Sync, button" in capsys.readouterr().out
+
+
+def test_watch_guesses_a_label_for_an_unnamed_focus():
+    said = []
+    unnamed = Node("button", "", bbox=(10, 10, 32, 32))
+    asked = []
+    a = Actions(say=lambda text, interrupt=True: said.append(text), read_foreground=lambda: (None, None), describe_foreground=None,
+                read_focus=lambda: unnamed, guess_label=lambda node: asked.append(node) or "Settings")
+    a.run("focus")
+    assert said == ["unlabeled button", "Probably: Settings (a guess from its picture)."] and asked == [unnamed]
+    named = Actions(say=lambda text, interrupt=True: said.append(text), read_foreground=lambda: (None, None), describe_foreground=None,
+                    read_focus=lambda: Node("button", "Save"), guess_label=lambda node: asked.append(node) or "x")
+    named.run("focus")
+    assert len(asked) == 1, "a control with a name is not guessed at"
