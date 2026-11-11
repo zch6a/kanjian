@@ -40,6 +40,19 @@ class Read:
             self.focus_outside_page = not (x <= fx <= x + w and y <= fy <= y + h)
 
 
+def load_tree(path: str) -> dict:
+    p = Path(path)
+    if not p.is_file():
+        raise ValueError(f"no such file: {path}")
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise ValueError(f"{path} is not a tree saved with `kanjian dump` ({e})") from e
+    if not isinstance(data, dict) or not isinstance(data.get("window", data), dict) or "role" not in data.get("window", data):
+        raise ValueError(f"{path} is not a tree saved with `kanjian dump` (no window in it)")
+    return data
+
+
 def read_window(args) -> Read:
     """The window the arguments name: --tree FILE (a saved tree), --window TITLE, or the window in front
     after --after seconds. Without any of them kanjian would read the terminal it was typed into, so
@@ -50,7 +63,7 @@ def read_window(args) -> Read:
         return node if getattr(args, "whole_window", False) else content(node)
 
     if getattr(args, "tree", None):
-        data = json.loads(Path(args.tree).read_text(encoding="utf-8"))
+        data = load_tree(args.tree)
         focused = Node.from_dict(data["focused"]) if data.get("focused") else None
         return Read(scoped(Node.from_dict(data.get("window", data))), focused)
     if not getattr(args, "window", None) and not args.after:
@@ -172,6 +185,10 @@ def make_vision(args):
 
 
 def cmd_describe(args) -> int:
+    if not (args.image or args.clipboard or args.window or args.after):
+        # The window in front now is the terminal this was typed into.
+        raise ValueError("what should be described? Give an image file, --clipboard, --window TITLE, "
+                         "or --after 3 and switch to the window within 3 s")
     client = make_vision(args)  # refuses a remote endpoint before anything is captured
     if args.image and not Path(args.image).is_file():
         raise RuntimeError(f"no such image: {args.image}")
@@ -245,8 +262,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     a = sub.add_parser("audit", help="accessibility problems in a window (exit code 1 if there are errors)")
     common(a)
-    a.add_argument("--format", choices=["text", "json", "sarif"], default="text")
-    a.add_argument("--min-target", type=int, default=24, help="smallest target size in px (WCAG 2.5.8: 24)")
+    a.add_argument("--format", choices=["text", "json", "sarif"], default="text", help="text (default), json, or SARIF 2.1.0 for code scanning")
+    a.add_argument("--min-target", type=int, default=24, metavar="PX",
+                   help="smallest target size in effective pixels, before display scaling (WCAG 2.5.8: 24)")
 
     d = sub.add_parser("dump", help="save a window's tree as JSON (for bug reports and tests)")
     common(d)
@@ -258,18 +276,19 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--window", metavar="TITLE", help="a picture of a window, by (part of) its title")
     v.add_argument("--after", type=float, default=0, metavar="SECONDS", help="without an image: wait, then capture the window in front")
     v.add_argument("--task", choices=["describe", "text", "control"], default="describe", help="describe it, read its text, or suggest a label")
-    v.add_argument("--lang", choices=["en", "zh"], default="en")
+    v.add_argument("--lang", choices=["en", "zh"], default="en", help="language of the description (default en)")
     v.add_argument("--vlm-url", help=f"OpenAI-compatible endpoint (or KANJIAN_VLM_URL; default {DEFAULT_VLM_URL}, Ollama)")
     v.add_argument("--vlm-model", help=f"vision model (or KANJIAN_VLM_MODEL; default {DEFAULT_VLM_MODEL})")
     v.add_argument("--allow-remote", action="store_true", help="allow an endpoint that is not on this machine (screens hold private data)")
     output(v)
 
     w = sub.add_parser("watch", help="stay in the background; hotkeys read and describe the window in front")
-    w.add_argument("--lang", choices=["en", "zh"], default="en")
-    w.add_argument("--vlm-url")
-    w.add_argument("--vlm-model")
-    w.add_argument("--allow-remote", action="store_true")
-    w.add_argument("--say", choices=["auto", "nvda", "voice", "text"], default="auto")
+    w.add_argument("--lang", choices=["en", "zh"], default="en", help="language of what kanjian says (default en)")
+    w.add_argument("--vlm-url", help="vision endpoint for D and for guessing labels (as in `kanjian describe`)")
+    w.add_argument("--vlm-model", help=f"vision model (default {DEFAULT_VLM_MODEL})")
+    w.add_argument("--allow-remote", action="store_true", help="allow a vision endpoint that is not on this machine")
+    w.add_argument("--say", choices=["auto", "nvda", "voice", "text"], default="auto",
+                   help="auto (default: NVDA if running, else a Windows voice), nvda, voice, or text")
     w.add_argument("--keys", default="ctrl+shift+alt", help="modifiers for the hotkeys (default ctrl+shift+alt; Ctrl+Alt alone is AltGr on many keyboards)")
     return p
 
@@ -283,16 +302,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "describe" and sum(bool(x) for x in (args.image, args.clipboard, args.window)) > 1:
         print("kanjian: give one of: an image file, --clipboard or --window", file=sys.stderr)
         return 2
-    from .uia import UIAUnavailable
-    from .vision import RemoteNotAllowed, VisionError
-
+    # kanjian's own errors are RuntimeError (UIAUnavailable, VisionError) or OSError (RemoteNotAllowed),
+    # so the vision module (and urllib, a third of the start-up time) is imported only when it is used.
     try:
         if args.command == "watch":
             from .watch import run
 
             return run(args)
         return {"screen": cmd_screen, "audit": cmd_audit, "dump": cmd_dump, "describe": cmd_describe}[args.command](args)
-    except (RemoteNotAllowed, VisionError, UIAUnavailable, RuntimeError, OSError, ValueError) as e:
+    except (RuntimeError, OSError, ValueError) as e:
         print(f"kanjian: {e}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

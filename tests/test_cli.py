@@ -248,3 +248,48 @@ def test_watch_guesses_a_label_for_an_unnamed_focus():
                     read_focus=lambda: Node("button", "Save"), guess_label=lambda node: asked.append(node) or "x")
     named.run("focus")
     assert len(asked) == 1, "a control with a name is not guessed at"
+
+
+def test_describe_with_nothing_named_asks_instead_of_capturing_the_terminal(capsys, monkeypatch):
+    captured = []
+    monkeypatch.setattr("kanjian.windows.capture_window", lambda hwnd: captured.append(hwnd))
+    assert cli.main(["describe"]) == 2
+    assert "what should be described?" in capsys.readouterr().err and captured == []
+
+
+@pytest.mark.parametrize(("content", "said"), [(None, "no such file"), ("not json", "is not a tree saved with"),
+                                                ("[1, 2]", "no window in it"), ('{"name": "x"}', "no window in it")])
+def test_a_bad_tree_file_is_explained(tmp_path, capsys, content, said):
+    p = tmp_path / "t.json"
+    if content is not None:
+        p.write_text(content, encoding="utf-8")
+    assert cli.main(["audit", "--tree", str(p)]) == 2
+    err = capsys.readouterr().err
+    assert said in err and "Errno" not in err and "Traceback" not in err
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="watch is Windows only")
+def test_watch_reports_bad_keys_before_starting(capsys):
+    assert cli.main(["watch", "--keys", "alt+s"]) == 2
+    assert "unknown modifier" in capsys.readouterr().err
+
+
+def test_every_option_has_help():
+    parser = cli.build_parser()
+    subs = next(a for a in parser._actions if a.dest == "command").choices
+    missing = [f"{name} {a.option_strings[0]}" for name, sp in subs.items() for a in sp._actions
+               if a.option_strings and a.help is None]
+    assert missing == []
+
+
+def test_the_terminal_running_kanjian_is_not_the_window_meant():
+    from kanjian.windows import pick_window
+
+    notepad, terminal = (1, "Untitled - Notepad"), (2, "Command Prompt - kanjian screen --window notepad")
+    assert pick_window([notepad, terminal], "notepad") == 1
+    assert pick_window([notepad, (3, "notepad")], "Notepad") == 3, "an exact title wins"
+    assert pick_window([notepad, (9, "Notepad tips - PowerShell")], "notepad", own=9) == 1
+    with pytest.raises(RuntimeError, match="2 windows match"):
+        pick_window([notepad, (4, "Notepad++")], "notepad")
+    with pytest.raises(RuntimeError, match="no window has"):
+        pick_window([terminal], "notepad")

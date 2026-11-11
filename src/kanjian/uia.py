@@ -46,7 +46,7 @@ def _automation():
 
         return comtypes.client.CreateObject(CUIAutomation, interface=IUIAutomation)
     except Exception as e:  # noqa: BLE001
-        raise UIAUnavailable(f"UI Automation is not available: {e} (pip install comtypes)") from e
+        raise UIAUnavailable(f"UI Automation is not available: {e} (reinstall kanjian, or: pip install comtypes)") from e
 
 
 P_BOUNDS, P_HWND = 30001, 30020

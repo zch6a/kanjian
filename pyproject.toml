@@ -5,7 +5,7 @@ description = "Hear what is on the screen: a screen and image describer for blin
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
-dependencies = ["pillow>=10"]
+dependencies = ["pillow>=10.3","comtypes>=1.2; sys_platform == 'win32'"]
 keywords = ["accessibility", "a11y", "screen-reader", "blind", "low-vision", "ui-automation", "vision-language-model", "nvda", "wcag", "windows"]
 
 [project.urls]
@@ -13,7 +13,7 @@ Homepage = "https://github.com/zch6a/kanjian"
 Issues = "https://github.com/zch6a/kanjian/issues"
 
 [project.optional-dependencies]
-windows = ["comtypes>=1.2; sys_platform == 'win32'"]
+windows = []  # comtypes is now installed on Windows by default; the extra is kept so that old install commands work
 
 [project.scripts]
 kanjian = "kanjian.cli:main"

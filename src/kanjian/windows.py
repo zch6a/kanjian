@@ -73,6 +73,15 @@ def find_window(title: str) -> int:
         return True
 
     user32.EnumWindows(visit, 0)
+    return pick_window(matches, title, own=ctypes.windll.kernel32.GetConsoleWindow() or 0)
+
+
+def pick_window(matches: list[tuple[int, str]], title: str, own: int = 0) -> int:
+    """The one window meant by `title`, from the visible windows whose title contains it. The terminal
+    kanjian runs in does not count: cmd puts the running command in its title ("Command Prompt -
+    kanjian screen --window Notepad"), which always contains the title asked for."""
+    want = title.lower()
+    matches = [(h, t) for h, t in matches if h != own and "--window" not in t]
     exact = [m for m in matches if m[1].lower() == want]
     if len(exact) == 1:
         return exact[0][0]
@@ -131,16 +140,16 @@ def capture_window(hwnd: int):
     window_dc = user32.GetWindowDC(hwnd)
     memory_dc = gdi32.CreateCompatibleDC(window_dc)
     bitmap = gdi32.CreateCompatibleBitmap(window_dc, w, h)
+    old = gdi32.SelectObject(memory_dc, bitmap)
     try:
-        old = gdi32.SelectObject(memory_dc, bitmap)
         if not user32.PrintWindow(hwnd, memory_dc, 2):  # PW_RENDERFULLCONTENT: also windows drawn by the GPU
             raise RuntimeError("Windows could not render this window")
         header = BITMAPINFOHEADER(biSize=ctypes.sizeof(BITMAPINFOHEADER), biWidth=w, biHeight=-h, biPlanes=1, biBitCount=32)
         pixels = ctypes.create_string_buffer(w * h * 4)
         if not gdi32.GetDIBits(memory_dc, bitmap, 0, h, pixels, ctypes.byref(header), 0):
             raise RuntimeError("could not read the window's picture")
-        gdi32.SelectObject(memory_dc, old)
     finally:
+        gdi32.SelectObject(memory_dc, old)  # a bitmap still selected into a DC cannot be deleted: it would leak
         gdi32.DeleteObject(bitmap)
         gdi32.DeleteDC(memory_dc)
         user32.ReleaseDC(hwnd, window_dc)

@@ -22,16 +22,18 @@ local by default, and an accessibility audit for the developers who build those 
   headings, buttons and fields there are, and the controls in reading order, said the way a screen
   reader says them. It reads the window's accessibility tree, the same one NVDA and Narrator read, so
   it is exact and needs no model. A table is read as its size, columns and first row ("Prices, table,
-  2 rows, columns: Tool, Size, Price; first row: Spade, Large, 25.00"), a paragraph with a link as one
+  3 rows, 3 columns: Tool, Size, Price; first row: Spade, Large, 25.00", counting the header row as
+  NVDA does), a paragraph with a link as one
   sentence, and a control with no name with the nearest named one as a landmark ("unlabeled button,
   near 'Favourite'").
 - **What does this picture show?** `kanjian describe` asks a vision model about an image file, the
   clipboard, or a window. The model is told it is describing for a blind listener: the main point
   first, any text read exactly, no guessing about people.
 - **Why can't my users use this?** `kanjian audit` lists what makes a window hard to use without
-  sight: controls with no name, images with no description, names like "button" or "IMG_2041.JPG",
-  targets under 24 px with no space around them (WCAG 2.5.8, with its spacing exception), headings
-  that skip a level. Output is text, JSON or SARIF. The exit code is 1 when there are errors and 2 when
+  sight or a mouse: controls with no name, images with no description, names like "button" or
+  "IMG_2041.JPG", controls the keyboard cannot reach, and targets under 24 by 24 effective pixels that
+  are crowded by others (WCAG 2.5.8, with its spacing exception). Each finding names the WCAG 2.2
+  criterion it fails ([the rules](#audit-rules)). Output is text, JSON or SARIF. The exit code is 1 when there are errors and 2 when
   kanjian could not read the window, so CI can tell the two apart. (The SARIF has no file locations,
   since a window has none; it suits SARIF viewers, not GitHub code scanning.)
 
@@ -56,8 +58,13 @@ A screen holds mail, messages, half-typed passwords and bank pages, so:
 ## Install
 
 ```bash
-pip install "kanjian[windows] @ git+https://github.com/zch6a/kanjian"
+pip install "kanjian @ git+https://github.com/zch6a/kanjian"
 ```
+
+or, to have the `kanjian` command without touching other Python projects,
+`uv tool install git+https://github.com/zch6a/kanjian` (or `pipx install ...`). On Windows this also
+installs comtypes, which kanjian uses to reach UI Automation and Windows' voices. On macOS and Linux
+only `kanjian describe` works.
 
 For describing images, run a local vision model, for example with [Ollama](https://ollama.com):
 
@@ -141,9 +148,12 @@ vision model (none installed there). See [POLISH_LOG.md](POLISH_LOG.md).
 ## Develop
 
 ```bash
-uv venv && uv pip install -e ".[windows]" pytest ruff
+uv venv && uv pip install -e . pytest ruff
 uv run pytest
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how the tests work and how to report a window that kanjian
+reads badly, and [CHANGELOG.md](CHANGELOG.md) for what is in each version.
 
 ## License
 

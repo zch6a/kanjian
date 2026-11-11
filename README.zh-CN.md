@@ -17,9 +17,9 @@
 
 *kanjian* 就是“看见”。它回答读屏软件回答得慢的问题：
 
-- **这个窗口里有什么？** `kanjian screen` 告诉你窗口标题、焦点在哪、有几个标题、按钮和输入框，再按阅读顺序列出控件，说法和读屏软件一样。它读的是窗口的无障碍树，也就是 NVDA 和讲述人读的那棵树，所以准确，也不需要模型。表格会读成大小、列名和第一行（“Prices，表格，2 行，列：Tool，Size，Price；第一行：Spade，Large，25.00”），带链接的段落读成一句话，没有名称的控件会附上离它最近的有名称的控件作为参照（“无标签的按钮，在‘收藏’旁边”）。
+- **这个窗口里有什么？** `kanjian screen` 告诉你窗口标题、焦点在哪、有几个标题、按钮和输入框，再按阅读顺序列出控件，说法和读屏软件一样。它读的是窗口的无障碍树，也就是 NVDA 和讲述人读的那棵树，所以准确，也不需要模型。表格会读成大小、列名和第一行（“Prices，表格，3 行，3 列：Tool，Size，Price；第一行：Spade，Large，25.00”，和 NVDA 一样把表头行算在内），带链接的段落读成一句话，没有名称的控件会附上离它最近的有名称的控件作为参照（“未标注的按钮，在‘收藏’旁边”）。
 - **这张图里是什么？** `kanjian describe` 让视觉模型描述一个图片文件、剪贴板里的图片或一个窗口。模型知道自己是在给盲人描述：先说最重要的，文字一字不差地读，不猜测人物。
-- **为什么我的用户用不了？** `kanjian audit` 列出让盲人难以使用的问题：没有名称的控件、没有描述的图片、叫“button”或“IMG_2041.JPG”这种名字的元素、小于 24 像素且周围没有留出空间的点击目标（WCAG 2.5.8，包括其中的间距例外）、跳级的标题。可以输出文本、JSON 或 SARIF。发现错误时退出码为 1，kanjian 读不了窗口时为 2，CI 可以区分这两种情况。（SARIF 里没有文件位置，因为窗口没有文件；它适合 SARIF 查看器，不适合 GitHub 代码扫描。）
+- **为什么我的用户用不了？** `kanjian audit` 列出让看不见屏幕或不用鼠标的人难以使用的问题：没有名称的控件、没有描述的图片、叫“button”或“IMG_2041.JPG”这种名字的元素、键盘到不了的控件、小于 24×24 有效像素且与其他目标挤在一起的点击目标（WCAG 2.5.8，包括其中的间距例外）。每条问题都注明它不符合的 WCAG 2.2 成功标准（见[检查规则](#检查规则)）。可以输出文本、JSON 或 SARIF。发现错误时退出码为 1，kanjian 读不了窗口时为 2，CI 可以区分这两种情况。（SARIF 里没有文件位置，因为窗口没有文件；它适合 SARIF 查看器，不适合 GitHub 代码扫描。）
 
 ## 隐私
 
@@ -35,8 +35,10 @@
 ## 安装
 
 ```bash
-pip install "kanjian[windows] @ git+https://github.com/zch6a/kanjian"
+pip install "kanjian @ git+https://github.com/zch6a/kanjian"
 ```
+
+如果只想要 `kanjian` 命令、不影响其他 Python 项目，可以用 `uv tool install git+https://github.com/zch6a/kanjian`（或 `pipx install ...`）。在 Windows 上会一并安装 comtypes，kanjian 用它访问 UI Automation 和 Windows 语音。在 macOS 和 Linux 上只有 `kanjian describe` 可用。
 
 要描述图片，需要一个本地视觉模型，例如用 [Ollama](https://ollama.com)：
 
@@ -106,9 +108,11 @@ kanjian watch                         # 在后台运行，用快捷键操作
 ## 开发
 
 ```bash
-uv venv && uv pip install -e ".[windows]" pytest ruff
+uv venv && uv pip install -e . pytest ruff
 uv run pytest
 ```
+
+测试的工作方式、以及如何报告 kanjian 读得不好的窗口，见 [CONTRIBUTING.md](CONTRIBUTING.md)（英文）；每个版本的改动见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 许可证
 

@@ -55,7 +55,7 @@ class Node:
         """Every node with the path of its ancestors, in tree order."""
         yield self, path
         for c in self.children:
-            yield from c.walk(path + (self,))
+            yield from c.walk((*path, self))
 
     def __post_init__(self) -> None:
         if self.name.strip().lower() in PLACEHOLDER_NAMES:
@@ -157,8 +157,10 @@ def speak_node(n: Node, lang: str = "en") -> str:
         role = f"{role} {text['level'].format(n=n.level)}"
     if n.name.strip():
         parts = [n.name.strip().rstrip(":：").rstrip() or n.name.strip(), role]  # "Name, edit", not "Name:, edit"
-    else:  # "unlabeled button", "无标签的按钮"
+    elif n.role in INTERACTIVE or n.role == "image":  # "unlabeled button", "未标注的按钮": a name is missing
         parts = [f"{text['unlabeled']}{'' if lang == 'zh' else ' '}{role}".strip()]
+    else:  # a table or list with no name is just "table", as NVDA says it: nothing is missing
+        parts = [role]
     if n.value and n.value != n.name and n.role in ("edit", "combobox", "slider", "spinner", "progressbar"):
         parts.append(n.value)
     shown = {"half_pressed"} | n.states - {"mixed"} if toggle and "mixed" in n.states else n.states
@@ -342,15 +344,15 @@ def _table(n: Node, lang: str) -> str:
     head = speak_node(n, lang)
     # As NVDA says it, "table with 3 rows and 3 columns": the header row counts. The table's own count
     # (UIA Grid pattern) wins: a virtualized grid holds only the rows on screen.
-    n_rows = n.rows if n.rows else len(rows)
-    n_cols = n.columns if n.columns else (len(columns) or max((len([c for c in r.children if c.role != "rowheader"]) for r in rows), default=0))
+    n_rows = n.rows or len(rows)
+    n_cols = n.columns or (len(columns) or max((len([c for c in r.children if c.role != "rowheader"]) for r in rows), default=0))
     out = sep.join([head, f"{n_rows} 行" if lang == "zh" else f"{n_rows} {'row' if n_rows == 1 else 'rows'}"])
     if n_cols:
         out += sep + (f"{n_cols} 列" if lang == "zh" else f"{n_cols} {'column' if n_cols == 1 else 'columns'}")
     if columns:
         out += ("：" if lang == "zh" else ": ") + sep.join(columns)
     if data:
-        first = [c.value.strip() or c.name.strip() for c in data[0].children if c.role != "headeritem" and c.role != "header"]
+        first = [c.value.strip() or c.name.strip() for c in data[0].children if c.role not in HEADER_ROLES]
         if any(first):
             out += ("；第一行：" if lang == "zh" else "; first row: ") + sep.join(x for x in first if x)
     return out
@@ -503,7 +505,7 @@ WHOLE = ("combobox", "slider", "scrollbar")
 PARTS = ("spinner", "splitbutton")
 # Where the keyboard moves with arrow keys or shortcuts rather than Tab, so a part that is not
 # focusable on its own is still reachable.
-ARROW_KEYS = ("titlebar", "scrollbar", "toolbar", "menubar", "menu", "tab", "list", "tree", "table", "dataitem", "radio") + WHOLE + PARTS
+ARROW_KEYS = ("titlebar", "scrollbar", "toolbar", "menubar", "menu", "tab", "list", "tree", "table", "dataitem", "radio", *WHOLE, *PARTS)
 FOCUS_NEEDS_NAME = ("custom", "unknown", "list", "tree", "table")
 
 

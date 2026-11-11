@@ -65,7 +65,7 @@ def is_local(url: str) -> bool:
 def runs_remotely(model: str) -> bool:
     """Ollama's cloud models ("gpt-oss:120b-cloud") are reached through localhost but run on Ollama's servers."""
     name = model.lower()
-    return name.endswith("-cloud") or name.endswith(":cloud")
+    return name.endswith(("-cloud", ":cloud"))
 
 
 def prepare_image(image, max_side: int = 1344) -> bytes:
@@ -75,7 +75,11 @@ def prepare_image(image, max_side: int = 1344) -> bytes:
     from PIL import Image, ImageOps
 
     if isinstance(image, (bytes, bytearray)):
-        image = Image.open(io.BytesIO(image))
+        try:
+            image = Image.open(io.BytesIO(image))
+            image.load()
+        except (OSError, SyntaxError, ValueError) as e:  # Pillow raises all three for broken files
+            raise VisionError("that is not an image kanjian can read (PNG, JPEG, GIF, BMP, WebP and TIFF are)") from e
     image = ImageOps.exif_transpose(image)  # a phone photo upright, as it is shown, before its metadata goes
     image = image.convert("RGBA" if image.mode in ("RGBA", "LA", "P") else "RGB")
     w, h = image.size
@@ -149,7 +153,11 @@ class VisionClient:
             if e.code == 404 and "model" in detail.lower():
                 raise VisionError(f"the model \"{self.model}\" is not installed there; with Ollama: ollama pull {self.model}") from e
             raise VisionError(f"the vision model at {self.url} answered {e.code}: {detail}") from e
-        except (urllib.error.URLError, TimeoutError, OSError, KeyError, IndexError, TypeError, ValueError) as e:
+        except TimeoutError as e:
+            raise VisionError(f"the vision model took more than {self.timeout:g} s to answer. The first request after it "
+                              "starts includes loading the model, which can take a minute on a CPU: try again") from e
+        except (urllib.error.URLError, OSError, KeyError, IndexError, TypeError, ValueError) as e:
+            # (a timeout while connecting is wrapped in URLError: the server is not there, which is not slowness)
             raise VisionError(f"the vision model at {self.url} did not answer: {e}") from e
         out = clean_reply(reply if isinstance(reply, str) else "")
         if not out:

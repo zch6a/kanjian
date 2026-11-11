@@ -155,3 +155,27 @@ def test_a_phone_photo_is_sent_upright():
     img.save(raw, format="JPEG", exif=exif)
     out = Image.open(io.BytesIO(prepare_image(raw.getvalue())))
     assert out.size == (200, 400)
+
+
+def test_a_file_that_is_not_an_image_is_said_plainly():
+    with pytest.raises(VisionError, match="not an image kanjian can read"):
+        prepare_image(b"%PDF-1.7 this is not a picture")
+
+
+def test_a_model_slow_to_answer_is_told_apart_from_a_missing_one():
+    import time
+
+    class Slow(BaseHTTPRequestHandler):
+        def do_POST(self):
+            time.sleep(2)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Slow)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(VisionError, match="loading the model"):
+            VisionClient(f"http://127.0.0.1:{server.server_port}/v1", "m", timeout=0.5).describe(picture(64, 48))
+    finally:
+        server.shutdown()

@@ -297,3 +297,10 @@ def test_duplicates_you_tab_through_are_a_warning_and_skips_are_best_practice():
 
 def test_an_image_of_is_said_twice():
     assert [i.rule for i in audit(n("window", "W", [n("image", "Image of a spade")]))] == ["name-includes-role"]
+
+
+def test_only_controls_and_images_are_called_unlabeled():
+    assert speak_node(n("table", "", rows=3, columns=2)) == "table"
+    assert speak_node(n("list", ""), "zh") == "列表"
+    assert speak_node(n("image", "")) == "unlabeled image"
+    assert speak_node(n("link", ""), "zh") == "未标注的链接"

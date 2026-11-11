@@ -123,3 +123,37 @@ Checked against the standards and the screen readers themselves: WCAG 2.2 and it
 
 - **Test fix**: a stand-in vision server swapped its handler after its thread had started, which could race. It now gets its status and body when it is made.
 - 78 tests, ruff clean.
+
+## Round 4
+
+First run, error messages, help, performance, docs and a read-through of all the code. The wheel was built and installed into an empty virtual environment, the way a new user gets it, and every command was tried with nothing set up and with wrong input.
+
+**First run**
+- **A plain install could not read any window.** comtypes, which kanjian needs for UI Automation and Windows' voices, came only with the `[windows]` extra, and the README's install line was the only place that said so. `kanjian screen` then said "No module named 'comtypes'", and `kanjian watch` crashed with a traceback. comtypes is now a normal dependency on Windows. The extra is kept, empty, so that old install commands still work, and CI installs without it, so a missing dependency would fail there.
+- **`kanjian describe` with nothing named** captured the window in front, which is the terminal it was typed into. It now asks what to describe, as `screen` does, before contacting the model.
+- **`kanjian watch --keys alt+s`** checked the keys only after starting UI Automation. It now checks them first and says "unknown modifier".
+- **`watch` said nothing when no vision model was running** until D was pressed. It now says so at start, and D still checks each time, since the model may be started later.
+- **The terminal matched its own command.** cmd puts the running command in its title ("Command Prompt - kanjian screen --window Notepad"), so `--window Notepad` found two windows. Titles holding `--window`, and kanjian's own console, no longer count.
+
+**Error messages**
+- A missing tree file said "[Errno 2] No such file or directory". It now says "no such file". Invalid JSON, or JSON that is not a saved tree, says "is not a tree saved with `kanjian dump`".
+- A file that is not an image said "cannot identify image file <_io.BytesIO object at 0x…>". It now says it is not an image kanjian can read, and which formats are.
+- A model that is slow to answer (the first request loads the model, which can take a minute on a CPU) is told apart from one that is not there.
+- Every option of every command has help text, and a test keeps it that way. `--min-target` says it is in effective pixels.
+
+**Wording**
+- A table or list with no name was "unlabeled table". Nothing is missing there, and NVDA says just "table", so kanjian does too. "Unlabeled" is kept for controls and images.
+
+**Performance**
+- Start-up: `screen` and `audit` imported the vision module, and with it urllib, about 300 ms of each run. That import is now made only by `describe` and `watch`. What is left is mostly Python's own argparse, re and dataclasses.
+- A 20,000-element page in Edge (a table of 4,000 rows) reads in about 3 s, 1.7 s of which is UI Automation's cross-process fetch. The 3,000-element limit still applies, and the table's own row count (4,001) is reported even though the read stopped early.
+
+**Code**
+- **GDI handle leak**: if PrintWindow failed, the bitmap was deleted while still selected into its device context, so both leaked. It is now released in `finally`.
+- A wider ruff sweep (PIE, RET, PERF, FURB and others) found small things, which were tidied: `endswith` with a tuple, `int.bit_count`, the `HEADER_ROLES` constant used where it was spelled out. The rest are deliberate: local imports keep start-up fast, and the speakers share one `say` signature.
+
+**Docs and security**
+- New CONTRIBUTING.md (how the tests avoid the tester's own windows, how to report a window that reads badly without leaking private text) and CHANGELOG.md.
+- README: install with `pip`, `uv tool` or `pipx`; the table example and the audit summary match what kanjian now says.
+- Dependencies: pip-audit finds nothing in the installed versions. The Pillow floor is raised to 10.3, because 10.0 to 10.2 have known fixes missing (CVE-2023-50447, CVE-2024-28219).
+- 89 tests, ruff clean.

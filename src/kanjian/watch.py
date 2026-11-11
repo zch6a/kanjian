@@ -41,7 +41,7 @@ def parse_keys(spec: str) -> int:
         if part not in MODIFIERS:
             raise ValueError(f"unknown modifier \"{part}\" in --keys (use ctrl, shift, alt, win)")
         flags |= MODIFIERS[part]
-    if bin(flags).count("1") < 2:
+    if flags.bit_count() < 2:
         raise ValueError("--keys needs at least two modifiers, so that typing never triggers kanjian")
     return flags
 
@@ -107,15 +107,17 @@ def focus_detail(n: Node, lang: str = "en") -> str:
 def run(args) -> int:
     if sys.platform != "win32":
         raise RuntimeError("kanjian watch needs Windows")
-    import comtypes
-
+    modifiers = parse_keys(args.keys)  # a typo in --keys is reported before anything starts
     from .speak import best
-    from .uia import Reader
+    from .uia import Reader, UIAUnavailable
     from .windows import capture_window, foreground_window, set_dpi_aware, window_title
 
+    try:
+        import comtypes
+    except ImportError as e:
+        raise UIAUnavailable(f"UI Automation is not available: {e} (reinstall kanjian, or: pip install comtypes)") from e
     set_dpi_aware()
     comtypes.CoInitialize()
-    modifiers = parse_keys(args.keys)
     out = best(args.say)
     reader = Reader()
     describe = None
@@ -123,6 +125,10 @@ def run(args) -> int:
         from .cli import make_vision
 
         vision = make_vision(args)
+        try:
+            vision.check()
+        except Exception as e:  # noqa: BLE001 - it may be started later: D checks again each time
+            print(f"kanjian: no vision model is answering yet, so D will say so until one is ({e})", file=sys.stderr)
 
         def describe():
             hwnd = foreground_window()
@@ -142,7 +148,7 @@ def run(args) -> int:
             # Only the control's own pixels go to the model, cut from a picture of its window.
             return vision.describe(capture_control(foreground_window(), node.bbox), task="control")
 
-    actions = Actions(say=out.say, read_foreground=lambda: reader.foreground(), describe_foreground=describe,
+    actions = Actions(say=out.say, read_foreground=reader.foreground, describe_foreground=describe,
                       read_focus=read_focus, silence=out.stop, guess_label=guess, lang=args.lang)
     user32 = ctypes.windll.user32
     registered = []
