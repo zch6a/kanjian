@@ -77,9 +77,14 @@ class SAPI:
         """`wait`: return only when it has been said. A one-shot command must wait, or the process
         exits and the voice with it: kanjian screen used to say nothing at all."""
         flags = (self.PURGE if interrupt else 0) | (0 if self.stream else self.ASYNC)
-        self.voice.Speak(text, flags)
-        if wait and not self.stream:
-            self.voice.WaitUntilDone(-1)
+        try:
+            self.voice.Speak(text, flags)
+            if wait and not self.stream:
+                self.voice.WaitUntilDone(-1)
+        except Exception as e:  # noqa: BLE001 - a COMError, such as no audio output device
+            code = getattr(e, "hresult", None) or (e.args[0] if e.args else "")
+            raise OSError(f"Windows could not speak ({code if isinstance(code, str) else hex(code & 0xFFFFFFFF)}); "
+                          "is there an audio output device?") from e
 
     def stop(self) -> None:
         self.voice.Speak("", self.ASYNC | self.PURGE)
@@ -88,6 +93,33 @@ class SAPI:
         if self.stream is not None:
             self.stream.Close()
             self.stream = None
+
+
+class Fallback:
+    """A speaker that prints instead when speaking fails (no audio device, a voice that broke), once
+    saying why, so that what kanjian found is never lost."""
+
+    def __init__(self, speaker, warn=None):
+        self.speaker, self.name = speaker, speaker.name
+        self.warn = warn or (lambda message: print(f"kanjian: {message}", file=sys.stderr))
+        self.failed = False
+
+    def say(self, text: str, interrupt: bool = True, wait: bool = False) -> None:
+        if not self.failed:
+            try:
+                self.speaker.say(text, interrupt=interrupt, wait=wait)
+                return
+            except OSError as e:
+                self.failed = True
+                self.warn(f"{e}; printing instead")
+        print(text, flush=True)
+
+    def stop(self) -> None:
+        if not self.failed:
+            try:
+                self.speaker.stop()
+            except OSError:
+                pass
 
 
 def nvda_running() -> bool:
@@ -125,7 +157,7 @@ def best(prefer: str = "auto", warn=None):
                  "of talking over NVDA in a second voice")
             return Printer()
     try:
-        return SAPI()
+        return Fallback(SAPI(), warn)
     except Exception as e:  # noqa: BLE001 - no voices, no comtypes
         if prefer == "voice":
             raise OSError(f"no Windows voice is available: {e}") from e

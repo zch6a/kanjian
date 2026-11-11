@@ -97,6 +97,30 @@ def test_a_one_shot_command_waits_until_the_voice_has_finished():
     s = SAPI()
     s.voice.Volume = 0  # silent: this test must not make a sound
     t0 = time.perf_counter()
-    s.say("one two three four five six seven eight nine ten", wait=True)
+    try:
+        s.say("one two three four five six seven eight nine ten", wait=True)
+    except OSError as e:  # CI runners have no audio output device
+        pytest.skip(str(e))
     assert time.perf_counter() - t0 > 1.0, "returned before the sentence was spoken"
     assert s.voice.Status.RunningState == 1  # SRSEDone
+
+
+def test_when_speaking_fails_the_text_is_printed_once_with_the_reason(capsys):
+    from kanjian.speak import Fallback
+
+    class Broken:
+        name = "Windows voice"
+
+        def say(self, text, interrupt=True, wait=False):
+            raise OSError("Windows could not speak (0x8004503a); is there an audio output device?")
+
+        def stop(self):
+            raise OSError("no device")
+
+    warnings = []
+    f = Fallback(Broken(), warn=warnings.append)
+    f.say("Save, button")
+    f.say("Cancel, button")
+    f.stop()
+    assert capsys.readouterr().out == "Save, button\nCancel, button\n"
+    assert len(warnings) == 1 and "audio output device" in warnings[0]
