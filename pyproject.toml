@@ -1,0 +1,44 @@
+[project]
+name = "kanjian"
+version = "0.1.0"
+description = "Hear what is on the screen: a screen and image describer for blind and low-vision users, local by default, plus an accessibility audit for developers."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["pillow>=10"]
+keywords = ["accessibility", "a11y", "screen-reader", "blind", "low-vision", "ui-automation", "vision-language-model", "nvda", "wcag", "windows"]
+
+[project.urls]
+Homepage = "https://github.com/zch6a/kanjian"
+Issues = "https://github.com/zch6a/kanjian/issues"
+
+[project.optional-dependencies]
+windows = ["comtypes>=1.2; sys_platform == 'win32'"]
+
+[project.scripts]
+kanjian = "kanjian.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kanjian"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+
+[tool.ruff]
+line-length = 150
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "I"]
+ignore = ["E501", "SIM108"]  # long prompts and messages read better whole; an if/else can read better than a ternary
+
+[tool.ruff.lint.isort]
+known-first-party = ["kanjian", "win32window"]
