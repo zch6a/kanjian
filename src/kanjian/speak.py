@@ -8,6 +8,7 @@ with NVDA's releases); kanjian looks for it in NVDA's program folder and next to
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import os
 import sys
@@ -116,10 +117,8 @@ class Fallback:
 
     def stop(self) -> None:
         if not self.failed:
-            try:
+            with contextlib.suppress(OSError):
                 self.speaker.stop()
-            except OSError:
-                pass
 
 
 def nvda_running() -> bool:
