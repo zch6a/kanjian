@@ -118,3 +118,54 @@ def test_failures_are_clear():
 def test_clean_reply():
     assert clean_reply("这张图片显示了：一个登录表单") == "一个登录表单"
     assert clean_reply("A chart.") == "A chart."
+
+
+def test_no_model_running_says_what_to_install():
+    c = VisionClient("http://127.0.0.1:9/v1", "qwen2.5vl:3b")
+    with pytest.raises(VisionError, match="ollama pull qwen2.5vl:3b"):
+        c.check()
+
+
+def test_a_model_that_is_not_pulled_says_so():
+    fake = FakeVLM()
+
+    class Handler404(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = b'{"error":{"message":"model \\"llava\\" not found, try pulling it first"}}'
+            self.send_response(404)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    fake.server.RequestHandlerClass = Handler404
+    try:
+        with pytest.raises(VisionError, match="ollama pull llava"):
+            VisionClient(fake.url, "llava").describe(picture(64, 48))
+    finally:
+        fake.close()
+
+
+def test_a_name_that_only_looks_local_is_not():
+    assert not is_local("http://127.attacker.example/v1") and not is_local("http://localhost.attacker.example/v1")
+    assert is_local("http://127.0.0.5:11434/v1") and is_local("http://app.localhost:8080/v1")
+    with pytest.raises(RemoteNotAllowed):
+        VisionClient("http://127.attacker.example/v1", "m")
+
+
+def test_ollama_cloud_models_count_as_remote():
+    with pytest.raises(RemoteNotAllowed, match="cloud model"):
+        VisionClient("http://localhost:11434/v1", "qwen3-vl:235b-cloud")
+    VisionClient("http://localhost:11434/v1", "qwen3-vl:235b-cloud", allow_remote=True)
+
+
+def test_a_phone_photo_is_sent_upright():
+    img = Image.new("RGB", (400, 200), (0, 0, 0))
+    exif = img.getexif()
+    exif[0x0112] = 6  # Orientation: rotate 90 degrees to display
+    raw = io.BytesIO()
+    img.save(raw, format="JPEG", exif=exif)
+    out = Image.open(io.BytesIO(prepare_image(raw.getvalue())))
+    assert out.size == (200, 400)

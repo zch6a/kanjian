@@ -1,42 +1,67 @@
-"""`kanjian watch`: global hotkeys, from any application.
+"""`kanjian watch`: global hotkeys, from any application. By default Ctrl+Shift+Alt and a letter:
+Ctrl+Alt alone is AltGr on many keyboards, where AltGr+Q types "@" in German.
 
-    Ctrl+Alt+S   overview of the window in front (controls, headings, focus)
-    Ctrl+Alt+F   the element with the focus, in full (name, role, value, states, description)
-    Ctrl+Alt+D   describe the window in front with the vision model (a picture of that window only)
-    Ctrl+Alt+Q   stop
+    S   overview of the window in front (controls, headings, focus), one line at a time
+    F   the element with the focus, in full (name, role, value, states, description)
+    D   describe the window in front with the vision model (a picture of that window only)
+    X   stop speaking
+    Q   stop kanjian (Ctrl+C in its terminal works too)
 """
 
 from __future__ import annotations
 
 import ctypes
 import sys
+import time
 from collections.abc import Callable
 from ctypes import wintypes
 from dataclasses import dataclass
 
 from .tree import Node, speak_node, summarize
 
-MOD_ALT, MOD_CONTROL, MOD_NOREPEAT = 0x0001, 0x0002, 0x4000
+MODIFIERS = {"ctrl": 0x0002, "alt": 0x0001, "shift": 0x0004, "win": 0x0008}
+MOD_NOREPEAT = 0x4000
 WM_HOTKEY = 0x0312
-HOTKEYS = {1: ("S", "summary"), 2: ("F", "focus"), 3: ("D", "describe"), 4: ("Q", "quit")}
+PM_REMOVE = 0x0001
+ACTIONS = {1: ("S", "summary"), 2: ("F", "focus"), 3: ("D", "describe"), 4: ("X", "silence"), 5: ("Q", "quit")}
 WORDS = {
     "en": {"no_focus": "Nothing has the focus.", "no_vision": "No vision model is set up; see kanjian describe --help.",
-           "looking": "Looking...", "ready": "kanjian is ready. Control Alt S for an overview, F for the focus, D to describe, Q to stop.",
+           "looking": "Looking...", "ready": "kanjian is ready. {keys} and S for an overview, F for the focus, D to describe, X to stop speaking, Q to quit.",
            "bye": "kanjian stopped.", "failed": "That did not work: {e}"},
     "zh": {"no_focus": "没有元素获得焦点。", "no_vision": "还没有配置视觉模型，见 kanjian describe --help。",
-           "looking": "正在看……", "ready": "kanjian 已就绪。Ctrl Alt S 概览，F 读焦点，D 描述画面，Q 退出。",
+           "looking": "正在看……", "ready": "kanjian 已就绪。{keys} 加 S 概览，F 读焦点，D 描述画面，X 停止朗读，Q 退出。",
            "bye": "kanjian 已停止。", "failed": "没能完成：{e}"},
 }
+
+
+def parse_keys(spec: str) -> int:
+    """"ctrl+shift+alt" -> the RegisterHotKey modifier flags."""
+    flags = 0
+    for part in spec.lower().replace(" ", "").split("+"):
+        if part not in MODIFIERS:
+            raise ValueError(f"unknown modifier \"{part}\" in --keys (use ctrl, shift, alt, win)")
+        flags |= MODIFIERS[part]
+    if bin(flags).count("1") < 2:
+        raise ValueError("--keys needs at least two modifiers, so that typing never triggers kanjian")
+    return flags
 
 
 @dataclass
 class Actions:
     """What the hotkeys do, with everything they need passed in, so it can be tested without a desktop."""
 
-    say: Callable[[str], None]
+    say: Callable[..., None]  # say(text, interrupt=True)
     read_foreground: Callable[[], tuple[Node, Node | None]]
     describe_foreground: Callable[[], str] | None
+    read_focus: Callable[[], Node | None] | None = None  # the focus alone, without reading the whole window
+    silence: Callable[[], None] | None = None
     lang: str = "en"
+
+    def _lines(self, lines: list[str]) -> None:
+        # One utterance per line: the first interrupts whatever was being said, the rest queue up, and
+        # "stop speaking" can cut in between.
+        for i, line in enumerate(lines):
+            self.say(line.strip(), interrupt=i == 0)
 
     def run(self, action: str) -> bool:
         """Do `action`; False when it is time to stop."""
@@ -45,11 +70,14 @@ class Actions:
             if action == "quit":
                 self.say(w["bye"])
                 return False
-            if action == "summary":
+            if action == "silence":
+                if self.silence:
+                    self.silence()
+            elif action == "summary":
                 window, focused = self.read_foreground()
-                self.say("\n".join(summarize(window, focused, lang=self.lang)))
+                self._lines(summarize(window, focused, lang=self.lang))
             elif action == "focus":
-                _, focused = self.read_foreground()
+                focused = self.read_focus() if self.read_focus else self.read_foreground()[1]
                 self.say(focus_detail(focused, self.lang) if focused else w["no_focus"])
             elif action == "describe":
                 if self.describe_foreground is None:
@@ -80,8 +108,11 @@ def run(args) -> int:
 
     from .speak import best
     from .uia import Reader
+    from .windows import capture_window, foreground_window, set_dpi_aware, window_title
 
+    set_dpi_aware()
     comtypes.CoInitialize()
+    modifiers = parse_keys(args.keys)
     out = best(args.say)
     reader = Reader()
     describe = None
@@ -91,32 +122,39 @@ def run(args) -> int:
         vision = make_vision(args)
 
         def describe():
-            from .windows import capture_window, foreground_window
-
             hwnd = foreground_window()
-            window = reader.window(hwnd)
-            return vision.describe(capture_window(hwnd), context=f"window: {window.name}")
+            vision.check()
+            return vision.describe(capture_window(hwnd), context=f"window: {window_title(hwnd)}")
     except Exception as e:  # noqa: BLE001 - describing is optional; the rest works without it
         print(f"kanjian: describing is off ({e})", file=sys.stderr)
-    actions = Actions(say=out.say, read_foreground=reader.foreground, describe_foreground=describe, lang=args.lang)
 
+    def read_focus():
+        return reader.focus_in(foreground_window())
+
+    actions = Actions(say=out.say, read_foreground=lambda: reader.foreground(), describe_foreground=describe,
+                      read_focus=read_focus, silence=out.stop, lang=args.lang)
     user32 = ctypes.windll.user32
     registered = []
-    for hid, (key, _) in HOTKEYS.items():
-        if user32.RegisterHotKey(None, hid, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, ord(key)):
+    for hid, (key, _) in ACTIONS.items():
+        if user32.RegisterHotKey(None, hid, modifiers | MOD_NOREPEAT, ord(key)):
             registered.append(hid)
         else:
-            print(f"kanjian: Ctrl+Alt+{key} is taken by another program", file=sys.stderr)
+            print(f"kanjian: {args.keys}+{key} is taken by another program", file=sys.stderr)
     if not registered:
-        raise RuntimeError("no hotkey could be registered")
-    print(f"listening (speaking through: {out.name}); Ctrl+Alt+Q or Ctrl+C to stop", file=sys.stderr)
-    out.say(WORDS[args.lang]["ready"])
+        raise RuntimeError("no hotkey could be registered; try other --keys")
+    keys = args.keys.replace("+", " ").title()
+    print(f"listening (speaking through: {out.name}); {args.keys}+Q or Ctrl+C here to stop", file=sys.stderr)
+    out.say(WORDS[args.lang]["ready"].format(keys=keys))
     msg = wintypes.MSG()
     try:
-        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-            if msg.message == WM_HOTKEY and msg.wParam in HOTKEYS and not actions.run(HOTKEYS[msg.wParam][1]):
-                break
+        while True:
+            # Polled rather than blocking in GetMessage, so that Ctrl+C in the terminal stops kanjian at once.
+            while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_REMOVE):
+                if msg.message == WM_HOTKEY and msg.wParam in ACTIONS and not actions.run(ACTIONS[msg.wParam][1]):
+                    return 0
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        return 0
     finally:
         for hid in registered:
             user32.UnregisterHotKey(None, hid)
-    return 0

@@ -61,3 +61,42 @@ def test_windows_voice_to_a_file_makes_no_sound(tmp_path):
     s.close()
     with wave.open(str(out)) as w:
         assert w.getnframes() > 1000  # real speech, written instead of played
+
+
+def test_auto_does_not_talk_over_nvda_when_its_dll_is_missing(monkeypatch):
+    import kanjian.speak as speak
+
+    monkeypatch.setattr(speak.NVDA, "find", staticmethod(lambda: None))
+    monkeypatch.setattr(speak, "nvda_running", lambda: True)
+    warnings = []
+    if sys.platform == "win32":
+        assert isinstance(speak.best("auto", warn=warnings.append), Printer)
+        assert "second voice" in warnings[0]
+
+
+def test_voice_requested_but_unavailable_is_an_error(monkeypatch):
+    import kanjian.speak as speak
+
+    def broken(*a, **k):
+        raise RuntimeError("no voices")
+
+    monkeypatch.setattr(speak, "SAPI", broken)
+    monkeypatch.setattr(speak.NVDA, "find", staticmethod(lambda: None))
+    if sys.platform == "win32":
+        with pytest.raises(OSError, match="no Windows voice"):
+            speak.best("voice")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows voices")
+def test_a_one_shot_command_waits_until_the_voice_has_finished():
+    pytest.importorskip("comtypes")
+    import time
+
+    from kanjian.speak import SAPI
+
+    s = SAPI()
+    s.voice.Volume = 0  # silent: this test must not make a sound
+    t0 = time.perf_counter()
+    s.say("one two three four five six seven eight nine ten", wait=True)
+    assert time.perf_counter() - t0 > 1.0, "returned before the sentence was spoken"
+    assert s.voice.Status.RunningState == 1  # SRSEDone

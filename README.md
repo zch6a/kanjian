@@ -27,8 +27,10 @@ local by default, and an accessibility audit for the developers who build those 
   first, any text read exactly, no guessing about people.
 - **Why can't my users use this?** `kanjian audit` lists what makes a window hard to use without
   sight: controls with no name, images with no description, names like "button" or "IMG_2041.JPG",
-  targets under 24 px (WCAG 2.5.8), headings that skip a level. Output is text, JSON or SARIF, and the
-  exit code is 1 when there are errors, so it can run in CI.
+  targets under 24 px with no space around them (WCAG 2.5.8, with its spacing exception), headings
+  that skip a level. Output is text, JSON or SARIF. The exit code is 1 when there are errors and 2 when
+  kanjian could not read the window, so CI can tell the two apart. (The SARIF has no file locations,
+  since a window has none; it suits SARIF viewers, not GitHub code scanning.)
 
 ## Privacy
 
@@ -36,10 +38,17 @@ A screen holds mail, messages, half-typed passwords and bank pages, so:
 
 - **The accessibility tree never leaves the machine.** Reading it needs no model.
 - **Images go only to a vision model on this machine** (Ollama, LM Studio, llama.cpp, vLLM),
-  unless you pass `--allow-remote`. Before anything is sent, the image is reduced to at most 1344
-  pixels on its long side and stripped of all metadata. kanjian says how much it sent and where.
-- **Only the window you ask for** is captured, never the whole screen.
+  unless you pass `--allow-remote`. Ollama's cloud models (names ending in `-cloud`) count as remote:
+  they are reached through localhost but run on Ollama's servers. Before anything is sent, the image is
+  turned upright, reduced to at most 1344 pixels on its long side and stripped of all metadata. kanjian
+  says how much it sent and where.
+- **Only the window you ask for is captured**, and only it: Windows renders that window for kanjian
+  (`PrintWindow`), so a window or notification on top of it does not get into the picture. A minimized
+  window, or the desktop and taskbar in front, is refused rather than captured.
+- Nothing is captured before kanjian has checked that the model is local and running.
 - A local model is reached directly even when a proxy is configured.
+- In a browser, `screen`, `audit` and `dump` read the page, not the toolbars and address bar
+  (`--whole-window` to include them).
 
 ## Install
 
@@ -56,7 +65,8 @@ ollama pull qwen2.5vl:3b
 ## Use
 
 ```bash
-kanjian screen --after 3              # switch to a window within 3 s; hear what is in it
+kanjian screen --after 3              # switch to a window within 3 s; hear what is in it (with neither
+                                      # --after nor --window, kanjian asks: it would read its own terminal)
 kanjian screen --window Settings --say auto   # a window by title, spoken (NVDA if running, else a Windows voice)
 kanjian describe photo.jpg            # describe an image
 kanjian describe --clipboard --task text      # read the text in the copied image
@@ -66,19 +76,22 @@ kanjian dump --window "My App" -o tree.json   # save the tree for a bug report (
 kanjian watch                         # stay in the background, with hotkeys
 ```
 
-In `kanjian watch`, from any application:
+In `kanjian watch`, from any application (Ctrl+Shift+Alt by default, because Ctrl+Alt alone is AltGr
+on many keyboards; `--keys win+alt` and so on to change it):
 
 | Hotkey | |
 |---|---|
-| Ctrl+Alt+S | overview of the window in front |
-| Ctrl+Alt+F | the focused control in full: name, role, value, states, description |
-| Ctrl+Alt+D | describe the window in front with the vision model |
-| Ctrl+Alt+Q | stop |
+| Ctrl+Shift+Alt+S | overview of the window in front, one line at a time |
+| Ctrl+Shift+Alt+F | the focused control in full: name, role, value, states, description |
+| Ctrl+Shift+Alt+D | describe the window in front with the vision model |
+| Ctrl+Shift+Alt+X | stop speaking |
+| Ctrl+Shift+Alt+Q | quit (Ctrl+C in its terminal works too) |
 
 **Speech** goes through NVDA when it is running, in your voice and speed, using NVDA's controller client
 DLL (`nvdaControllerClient64.dll`, from NV Access; kanjian looks in NVDA's program folder, or set
-`KANJIAN_NVDA_DLL`). Otherwise it uses Windows' own voices, and with `--say text` (the default outside
-`watch`) it prints.
+`KANJIAN_NVDA_DLL`). If NVDA is running but the DLL is not found, kanjian prints rather than talk over
+NVDA in a second voice. Otherwise it uses Windows' own voices (one-shot commands wait until they have
+finished speaking), and with `--say text`, the default outside `watch`, it prints.
 
 The vision model is set with `--vlm-url` and `--vlm-model`, or `KANJIAN_VLM_URL`, `KANJIAN_VLM_MODEL`
 and `KANJIAN_VLM_API_KEY`. The default is Ollama at `http://localhost:11434/v1` with `qwen2.5vl:3b`.

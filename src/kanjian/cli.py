@@ -4,7 +4,7 @@
     kanjian describe photo.jpg        describe an image with a local vision model
     kanjian describe --clipboard      ... the image on the clipboard
     kanjian audit --window Settings   accessibility problems in a window, for developers
-    kanjian watch                     global hotkeys: Ctrl+Alt+S, Ctrl+Alt+D, Ctrl+Alt+F
+    kanjian watch                     global hotkeys: Ctrl+Shift+Alt with S, F, D, X, Q
 """
 
 from __future__ import annotations
@@ -26,23 +26,44 @@ DEFAULT_VLM_MODEL = "qwen2.5vl:3b"
 # ---------------------------------------------------------------- reading windows
 
 
-def read_window(args) -> tuple[Node, Node | None]:
-    """The window the arguments name: --tree FILE (a saved tree), --window TITLE, or the foreground
-    window after --after seconds."""
+class Read:
+    """What was read: the window (a browser's page only, unless --whole-window), the focus in it, and
+    how complete the reading was."""
+
+    def __init__(self, window: Node, focused: Node | None, focus_elsewhere: bool = False, truncated_at: int | None = None):
+        self.window, self.focused, self.focus_elsewhere, self.truncated_at = window, focused, focus_elsewhere, truncated_at
+
+
+def read_window(args) -> Read:
+    """The window the arguments name: --tree FILE (a saved tree), --window TITLE, or the window in front
+    after --after seconds. Without any of them kanjian would read the terminal it was typed into, so
+    it asks which window is meant instead."""
+    from .tree import content
+
+    def scoped(node: Node) -> Node:
+        return node if getattr(args, "whole_window", False) else content(node)
+
     if getattr(args, "tree", None):
         data = json.loads(Path(args.tree).read_text(encoding="utf-8"))
-        return Node.from_dict(data.get("window", data)), Node.from_dict(data["focused"]) if data.get("focused") else None
+        focused = Node.from_dict(data["focused"]) if data.get("focused") else None
+        return Read(scoped(Node.from_dict(data.get("window", data))), focused)
+    if not getattr(args, "window", None) and not args.after:
+        raise ValueError("which window? Pass --window TITLE, or --after 3 and switch to the window within 3 s "
+                         "(reading the window in front now would read this terminal)")
     from .uia import Reader
+    from .windows import find_window, foreground_window
 
     reader = Reader()
     if getattr(args, "window", None):
-        from .windows import find_window
-
-        return reader.window(find_window(args.window)), None
-    if args.after:
+        hwnd = find_window(args.window)
+    else:
         print(f"reading the window in front in {args.after:g} s...", file=sys.stderr)
         time.sleep(args.after)
-    return reader.foreground()
+        hwnd = foreground_window()
+    window = reader.window(hwnd)
+    truncated = reader.count if reader.truncated else None
+    focused = reader.focus_in(hwnd)
+    return Read(scoped(window), focused, focus_elsewhere=focused is None, truncated_at=truncated)
 
 
 # ---------------------------------------------------------------- output
@@ -84,26 +105,28 @@ def print_issues(issues: list[Issue], fmt: str, window: str) -> None:
 
 
 def cmd_screen(args) -> int:
-    window, focused = read_window(args)
-    lines = summarize(window, focused, lang=args.lang)
+    r = read_window(args)
+    lines = summarize(r.window, r.focused, lang=args.lang, focus_elsewhere=r.focus_elsewhere, truncated_at=r.truncated_at)
     if args.json:
-        print(json.dumps({"window": window.to_dict(), "focused": focused.to_dict() if focused else None}, ensure_ascii=False))
+        print(json.dumps({"window": r.window.to_dict(), "focused": r.focused.to_dict() if r.focused else None}, ensure_ascii=False))
         return 0
-    out = speaker(args)
-    out.say("\n".join(lines))
+    speaker(args).say("\n".join(lines), wait=True)
     return 0
 
 
 def cmd_audit(args) -> int:
-    window, _ = read_window(args)
-    issues = audit(window, min_target=args.min_target)
-    print_issues(issues, args.format, window.name)
+    """Exit 1 when there are errors, 0 when not; 2 means kanjian itself failed (see main)."""
+    r = read_window(args)
+    if r.truncated_at:
+        print(f"kanjian: only the first {r.truncated_at} elements were read, so this audit is partial", file=sys.stderr)
+    issues = audit(r.window, min_target=args.min_target)
+    print_issues(issues, args.format, r.window.name)
     return 1 if any(i.severity == "error" for i in issues) else 0
 
 
 def cmd_dump(args) -> int:
-    window, focused = read_window(args)
-    data = {"window": window.to_dict(), "focused": focused.to_dict() if focused else None}
+    r = read_window(args)
+    data = {"window": r.window.to_dict(), "focused": r.focused.to_dict() if r.focused else None}
     text = json.dumps(data, ensure_ascii=False, indent=2)
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8")
@@ -123,6 +146,9 @@ def make_vision(args):
 
 def cmd_describe(args) -> int:
     client = make_vision(args)  # refuses a remote endpoint before anything is captured
+    if args.image and not Path(args.image).is_file():
+        raise RuntimeError(f"no such image: {args.image}")
+    client.check()  # and a model that is not running, before a window is captured
     context = ""
     if args.image:
         image = Path(args.image).read_bytes()
@@ -142,15 +168,12 @@ def cmd_describe(args) -> int:
                 print(f"describing the window in front in {args.after:g} s...", file=sys.stderr)
                 time.sleep(args.after)
             hwnd = foreground_window()
-        image = capture_window(hwnd)
-        try:
-            from .uia import Reader
+        from .windows import window_title
 
-            context = "window: " + (Reader(max_nodes=1).window(hwnd).name or "untitled")
-        except Exception:  # noqa: BLE001 - context is only a help
-            context = ""
+        image = capture_window(hwnd)
+        context = "window: " + (window_title(hwnd) or "untitled")
     text = client.describe(image, task=args.task, context=context)
-    speaker(args).say(text)
+    speaker(args).say(text, wait=True)
     print(f"(sent {client.sent[-1] // 1024} KB of image data to {client.url})", file=sys.stderr)
     return 0
 
@@ -171,7 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
                                        "  kanjian screen --after 3           what is in the window in front\n"
                                        "  kanjian describe photo.jpg         describe an image (local vision model)\n"
                                        "  kanjian audit --window Settings    accessibility problems, for developers\n"
-                                       "  kanjian watch                      hotkeys: Ctrl+Alt+S, D, F")
+                                       "  kanjian watch                      hotkeys: Ctrl+Shift+Alt with S, F, D, X, Q")
     p.add_argument("--version", action="version", version=f"kanjian {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -182,6 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
             g.add_argument("--window", metavar="TITLE", help="a window by (part of) its title, instead of the one in front")
             g.add_argument("--tree", metavar="FILE", help="a tree saved with `kanjian dump`")
             sp.add_argument("--after", type=float, default=0, metavar="SECONDS", help="wait before reading the window in front, to switch to it")
+            sp.add_argument("--whole-window", action="store_true", help="in a browser, also its toolbars and address bar (default: the page only)")
 
     def output(sp):
         sp.add_argument("--say", choices=["auto", "nvda", "voice", "text"], default="text",
@@ -219,11 +243,16 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--vlm-model")
     w.add_argument("--allow-remote", action="store_true")
     w.add_argument("--say", choices=["auto", "nvda", "voice", "text"], default="auto")
+    w.add_argument("--keys", default="ctrl+shift+alt", help="modifiers for the hotkeys (default ctrl+shift+alt; Ctrl+Alt alone is AltGr on many keyboards)")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Exit codes: 0 fine; 1 `audit` found errors; 2 kanjian could not do what was asked."""
     args = build_parser().parse_args(argv)
+    from .windows import set_dpi_aware
+
+    set_dpi_aware()  # before any window is measured
     if args.command == "describe" and sum(bool(x) for x in (args.image, args.clipboard, args.window)) > 1:
         print("kanjian: give one of: an image file, --clipboard or --window", file=sys.stderr)
         return 2
@@ -238,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
         return {"screen": cmd_screen, "audit": cmd_audit, "dump": cmd_dump, "describe": cmd_describe}[args.command](args)
     except (RemoteNotAllowed, VisionError, UIAUnavailable, RuntimeError, OSError, ValueError) as e:
         print(f"kanjian: {e}", file=sys.stderr)
-        return 1
+        return 2
     except KeyboardInterrupt:
         return 130
 

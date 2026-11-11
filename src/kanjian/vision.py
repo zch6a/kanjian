@@ -49,18 +49,34 @@ class VisionError(RuntimeError):
 
 
 def is_local(url: str) -> bool:
+    """The endpoint is this machine: localhost, or a loopback address. A host name that merely starts
+    with "127." (127.attacker.example) is not."""
+    import ipaddress
+
     host = (urllib.parse.urlsplit(url).hostname or "").lower()
-    return host in ("localhost", "::1") or host.startswith("127.") or host.endswith(".localhost")
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def runs_remotely(model: str) -> bool:
+    """Ollama's cloud models ("gpt-oss:120b-cloud") are reached through localhost but run on Ollama's servers."""
+    name = model.lower()
+    return name.endswith("-cloud") or name.endswith(":cloud")
 
 
 def prepare_image(image, max_side: int = 1344) -> bytes:
     """PNG bytes of a PIL image (or image file bytes), at most `max_side` pixels on its long side, with
     no metadata: no EXIF location, no camera, no text chunks. Vision models gain nothing from more
     pixels than they read, and every pixel is data that leaves the screen."""
-    from PIL import Image
+    from PIL import Image, ImageOps
 
     if isinstance(image, (bytes, bytearray)):
         image = Image.open(io.BytesIO(image))
+    image = ImageOps.exif_transpose(image)  # a phone photo upright, as it is shown, before its metadata goes
     image = image.convert("RGBA" if image.mode in ("RGBA", "LA", "P") else "RGB")
     w, h = image.size
     if max(w, h) > max_side:
@@ -85,11 +101,28 @@ class VisionClient:
             raise RemoteNotAllowed(
                 f"{base_url} is not on this machine. kanjian sends screen contents only to a local model unless you "
                 "pass --allow-remote: a screenshot can hold mail, messages, passwords and bank details.")
+        if runs_remotely(model) and not allow_remote:
+            raise RemoteNotAllowed(f"\"{model}\" is a cloud model: Ollama sends its images to its own servers. Use a local "
+                                   "model, or pass --allow-remote.")
         if lang not in PROMPTS:
             raise ValueError(f"language must be one of {', '.join(PROMPTS)}")
         self.url = base_url.rstrip("/") + "/chat/completions"
         self.model, self.api_key, self.timeout, self.lang = model, api_key, timeout, lang
         self.sent: list[int] = []  # bytes of image data sent, per request (shown to the user)
+
+    def check(self) -> None:
+        """Is a model server answering at all? Only a TCP connection is opened (nothing is sent), and it
+        is done before anything is captured, so a missing model never costs a screenshot."""
+        import socket
+
+        parts = urllib.parse.urlsplit(self.url)
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        try:
+            socket.create_connection((parts.hostname, port), timeout=3).close()
+        except OSError:
+            hint = (" Install Ollama (https://ollama.com), run `ollama pull " + self.model + "`, and try again, or pass --vlm-url."
+                    if is_local(self.url) else "")
+            raise VisionError(f"no vision model is answering at {parts.scheme}://{parts.hostname}:{port}.{hint}") from None
 
     def describe(self, image, task: str = "describe", context: str = "") -> str:
         """`task`: "describe", "text" (read the text only) or "control" (suggest a label). `context`:
@@ -111,6 +144,11 @@ class VisionClient:
             with opener.open(req, timeout=self.timeout) as r:
                 data = json.loads(r.read().decode("utf-8"))
             reply = data["choices"][0]["message"]["content"]
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:300]
+            if e.code == 404 and "model" in detail.lower():
+                raise VisionError(f"the model \"{self.model}\" is not installed there; with Ollama: ollama pull {self.model}") from e
+            raise VisionError(f"the vision model at {self.url} answered {e.code}: {detail}") from e
         except (urllib.error.URLError, TimeoutError, OSError, KeyError, IndexError, TypeError, ValueError) as e:
             raise VisionError(f"the vision model at {self.url} did not answer: {e}") from e
         out = clean_reply(reply if isinstance(reply, str) else "")

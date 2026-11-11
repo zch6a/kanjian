@@ -77,7 +77,7 @@ def test_describe_an_image_file_with_a_local_model(tmp_path, capsys):
 def test_a_remote_model_is_refused_before_anything_is_captured(tmp_path, capsys, monkeypatch):
     captured = []
     monkeypatch.setattr("kanjian.windows.capture_window", lambda hwnd: captured.append(hwnd))
-    assert cli.main(["describe", "--window", "anything", "--vlm-url", "https://vision.example.com/v1"]) == 1
+    assert cli.main(["describe", "--window", "anything", "--vlm-url", "https://vision.example.com/v1"]) == 2
     assert "--allow-remote" in capsys.readouterr().err and captured == []
 
 
@@ -94,19 +94,47 @@ def test_dump_warns_that_the_tree_holds_private_text(tree_file, tmp_path, capsys
 
 def test_watch_actions_without_a_desktop():
     said = []
+
+    def say(text, interrupt=True):
+        said.append((text, interrupt))
+
     window, focused = Node.from_dict(TREE["window"]), Node.from_dict(TREE["focused"])
-    a = Actions(say=said.append, read_foreground=lambda: (window, focused), describe_foreground=lambda: "A checkout page.")
-    assert a.run("summary") and said[-1].startswith("Window: Checkout")
-    assert a.run("focus") and said[-1] == "Card number, edit, required"
-    assert a.run("describe") and said[-2:] == ["Looking...", "A checkout page."]
+    silenced = []
+    read_whole = []
+
+    def foreground():
+        read_whole.append(1)
+        return window, focused
+
+    a = Actions(say=say, read_foreground=foreground, describe_foreground=lambda: "A checkout page.",
+                read_focus=lambda: focused, silence=lambda: silenced.append(1))
+    assert a.run("summary")
+    assert said[0] == ("Window: Checkout", True) and all(not i for _, i in said[1:]), "one line at a time; only the first interrupts"
+    said.clear()
+    read_whole.clear()
+    assert a.run("focus") and said[-1][0] == "Card number, edit, required"
+    assert read_whole == [], "the focus alone is read, not the whole window"
+    assert a.run("describe") and [s for s, _ in said[-2:]] == ["Looking...", "A checkout page."]
+    assert a.run("silence") and silenced == [1]
     assert a.run("quit") is False
 
     def broken():
         raise RuntimeError("the window closed")
 
-    b = Actions(say=said.append, read_foreground=broken, describe_foreground=None)
-    assert b.run("summary") and said[-1] == "That did not work: the window closed"
-    assert b.run("describe") and "No vision model" in said[-1]
+    b = Actions(say=say, read_foreground=broken, describe_foreground=None)
+    assert b.run("summary") and said[-1][0] == "That did not work: the window closed"
+    assert b.run("describe") and "No vision model" in said[-1][0]
+
+
+def test_hotkey_modifiers():
+    from kanjian.watch import parse_keys
+
+    assert parse_keys("ctrl+shift+alt") == 0x0002 | 0x0004 | 0x0001
+    assert parse_keys("Win + Alt") == 0x0008 | 0x0001
+    with pytest.raises(ValueError, match="two modifiers"):
+        parse_keys("alt")
+    with pytest.raises(ValueError, match="unknown modifier"):
+        parse_keys("ctrl+meta")
 
 
 def test_focus_detail_includes_value_description_and_automation_id():
@@ -124,7 +152,57 @@ def test_audit_and_screen_of_a_real_window_by_title(capsys):
         assert "no-name" in capsys.readouterr().out
         assert cli.main(["screen", "--window", "kanjian cli test"]) == 0
         assert "Remember me, check box, checked" in capsys.readouterr().out
-        assert cli.main(["audit", "--window", "no window has this title 123"]) == 1
+        assert cli.main(["audit", "--window", "no window has this title 123"]) == 2  # kanjian failed: not "errors found"
         assert "no window has" in capsys.readouterr().err
+    finally:
+        w.close()
+
+
+def test_describe_with_no_model_running_captures_nothing(capsys, monkeypatch):
+    captured = []
+    monkeypatch.setattr("kanjian.windows.capture_window", lambda hwnd: captured.append(hwnd))
+    monkeypatch.setattr("kanjian.windows.find_window", lambda title: 1)
+    assert cli.main(["describe", "--window", "x", "--vlm-url", "http://127.0.0.1:9/v1"]) == 2
+    assert "no vision model is answering" in capsys.readouterr().err and captured == []
+
+
+def test_describe_a_missing_file(capsys):
+    assert cli.main(["describe", "nothere.png"]) == 2
+    assert "no such image: nothere.png" in capsys.readouterr().err
+
+
+def test_without_a_window_it_asks_instead_of_reading_the_terminal(capsys):
+    assert cli.main(["screen"]) == 2
+    assert "which window?" in capsys.readouterr().err
+
+
+def test_a_browser_is_read_as_its_page(tmp_path, capsys):
+    browser = {"role": "window", "name": "Shop - Browser", "children": [
+        {"role": "toolbar", "name": "App bar", "children": [{"role": "edit", "name": "Address and search bar", "value": "C:/Users/me/secret.html"}]},
+        {"role": "document", "name": "Shop", "bbox": [0, 80, 1200, 800], "children": [{"role": "button", "name": "Buy"}]},
+    ]}
+    p = tmp_path / "b.json"
+    p.write_text(json.dumps(browser), encoding="utf-8")
+    assert cli.main(["screen", "--tree", str(p)]) == 0
+    out = capsys.readouterr().out
+    assert "Buy, button" in out and "Address and search bar" not in out and "secret.html" not in out
+    assert cli.main(["screen", "--tree", str(p), "--whole-window"]) == 0
+    assert "Address and search bar" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
+def test_window_by_title_finds_the_focus_inside_it(capsys):
+    import ctypes
+    import time
+
+    from win32window import TestWindow
+
+    w = TestWindow("kanjian focus test")
+    try:
+        ctypes.windll.user32.SetForegroundWindow(w.hwnd)
+        time.sleep(0.3)
+        assert cli.main(["screen", "--window", "kanjian focus test"]) == 0
+        out = capsys.readouterr().out
+        assert "Nothing has the focus." not in out  # either the focus inside it, or "in another window"
     finally:
         w.close()

@@ -73,28 +73,35 @@ ROLE_WORDS = {
            "listitem": "list item", "treeitem": "tree item", "image": "image", "heading": "heading", "text": "",
            "list": "list", "table": "table", "progressbar": "progress bar", "splitbutton": "split button", "spinner": "spin box",
            "menu": "menu", "menubar": "menu bar", "toolbar": "toolbar", "statusbar": "status bar", "document": "document",
-           "tab": "tab list", "tree": "tree", "group": "group", "pane": "pane", "window": "window", "dialog": "dialog"},
+           "tab": "tab list", "tree": "tree", "group": "group", "pane": "pane", "window": "window", "dialog": "dialog",
+           "dataitem": "row", "header": "header", "headeritem": "column header", "calendar": "calendar", "custom": "",
+           "appbar": "app bar", "semanticzoom": "", "unknown": ""},
     "zh": {"button": "按钮", "link": "链接", "hyperlink": "链接", "checkbox": "复选框", "radio": "单选按钮",
            "combobox": "组合框", "edit": "编辑框", "menuitem": "菜单项", "tabitem": "选项卡", "slider": "滑块",
            "listitem": "列表项", "treeitem": "树节点", "image": "图像", "heading": "标题", "text": "",
            "list": "列表", "table": "表格", "progressbar": "进度条", "splitbutton": "拆分按钮", "spinner": "数值框",
            "menu": "菜单", "menubar": "菜单栏", "toolbar": "工具栏", "statusbar": "状态栏", "document": "文档",
-           "tab": "选项卡列表", "tree": "树", "group": "分组", "pane": "窗格", "window": "窗口", "dialog": "对话框"},
+           "tab": "选项卡列表", "tree": "树", "group": "分组", "pane": "窗格", "window": "窗口", "dialog": "对话框",
+           "dataitem": "行", "header": "表头", "headeritem": "列标题", "calendar": "日历", "custom": "",
+           "appbar": "应用栏", "semanticzoom": "", "unknown": ""},
 }
 STATE_WORDS = {
     "en": {"checked": "checked", "unchecked": "not checked", "disabled": "unavailable", "expanded": "expanded",
            "collapsed": "collapsed", "selected": "selected", "required": "required", "readonly": "read only",
-           "invalid": "invalid entry"},
+           "invalid": "invalid entry", "pressed": "pressed", "not_pressed": "not pressed", "mixed": "partially checked"},
     "zh": {"checked": "已选中", "unchecked": "未选中", "disabled": "不可用", "expanded": "已展开", "collapsed": "已折叠",
-           "selected": "已选择", "required": "必填", "readonly": "只读", "invalid": "输入无效"},
+           "selected": "已选择", "required": "必填", "readonly": "只读", "invalid": "输入无效",
+           "pressed": "已按下", "not_pressed": "未按下", "mixed": "部分选中"},
 }
 TEXT = {
     "en": {"unlabeled": "unlabeled", "window": "Window", "focus": "Focus", "nothing_focused": "Nothing has the focus.",
            "headings": "Headings", "controls": "Controls", "more": "and {n} more", "items": "{n} items",
-           "level": "level {n}", "no_problems": "No problems found."},
+           "level": "level {n}", "no_problems": "No problems found.", "elsewhere": "The focus is in another window.",
+           "partial": "Only the first {n} elements were read; the window has more."},
     "zh": {"unlabeled": "无标签的", "window": "窗口", "focus": "焦点", "nothing_focused": "没有元素获得焦点。",
            "headings": "标题", "controls": "控件", "more": "还有 {n} 个", "items": "{n} 项",
-           "level": "{n} 级", "no_problems": "没有发现问题。"},
+           "level": "{n} 级", "no_problems": "没有发现问题。", "elsewhere": "焦点在另一个窗口里。",
+           "partial": "只读了前 {n} 个元素，窗口里还有更多。"},
 }
 
 
@@ -110,8 +117,8 @@ def speak_node(n: Node, lang: str = "en") -> str:
         parts = [f"{text['unlabeled']}{'' if lang == 'zh' else ' '}{role}".strip()]
     if n.value and n.value != n.name and n.role in ("edit", "combobox", "slider", "spinner", "progressbar"):
         parts.append(n.value)
-    parts += [states[s] for s in ("checked", "unchecked", "selected", "expanded", "collapsed", "required", "readonly", "invalid", "disabled")
-              if s in n.states]
+    parts += [states[s] for s in ("checked", "unchecked", "mixed", "pressed", "not_pressed", "selected", "expanded", "collapsed",
+                                  "required", "readonly", "invalid", "disabled") if s in n.states]
     sep = "，" if lang == "zh" else ", "
     return sep.join(p for p in parts if p)
 
@@ -124,7 +131,13 @@ def _meaningful(n: Node) -> bool:
         return True
     if n.role == "text":
         return bool(n.name.strip())
+    if n.role in ("group", "dialog") and n.name.strip():
+        return True  # "Network, group": it says what the controls inside are about
     return n.role not in CONTAINERS and bool(n.name.strip())
+
+
+def _label_text(name: str) -> str:
+    return name.strip().rstrip(":：").strip().lower()
 
 
 def _reading_order(nodes: list[Node]) -> list[Node]:
@@ -161,25 +174,38 @@ def flatten(root: Node) -> list[Node]:
             visit(c)
 
     visit(root)
-    return out
+    # A text label right before the control it names would be said twice ("Display name",
+    # "Display name, edit"): keep the control only.
+    return [x for i, x in enumerate(out)
+            if not (x.role == "text" and i + 1 < len(out) and out[i + 1].role in INTERACTIVE
+                    and _label_text(x.name) and _label_text(x.name) == _label_text(out[i + 1].name))]
 
 
-def summarize(window: Node, focused: Node | None = None, *, lang: str = "en", max_items: int = 40) -> list[str]:
-    """Lines to read out, most useful first."""
+def summarize(window: Node, focused: Node | None = None, *, lang: str = "en", max_items: int = 40,
+              focus_elsewhere: bool = False, truncated_at: int | None = None) -> list[str]:
+    """Lines to read out, most useful first. `focus_elsewhere`: there is a focus, outside this window.
+    `truncated_at`: the tree was cut short after that many elements."""
     text = TEXT[lang]
     sep = "：" if lang == "zh" else ": "
     lines = [f"{text['window']}{sep}{window.name or text['unlabeled']}"]
-    lines.append(f"{text['focus']}{sep}{speak_node(focused, lang)}" if focused else text["nothing_focused"])
+    if focused:
+        lines.append(f"{text['focus']}{sep}{speak_node(focused, lang)}")
+    else:
+        lines.append(text["elsewhere"] if focus_elsewhere else text["nothing_focused"])
+    if truncated_at:
+        lines.append(text["partial"].format(n=truncated_at))
     items = flatten(window)
     counts: dict[str, int] = {}
     for n in items:
         counts[n.role] = counts.get(n.role, 0) + 1
     unnamed_images = sum(1 for n in items if n.role == "image" and not n.name.strip())
-    if counts:
-        lines.append(_counts(counts, unnamed_images, lang))
+    counted = _counts(counts, unnamed_images, lang)
+    if counted:
+        lines.append(counted)
     headings = [n for n in items if n.role == "heading"]
     if headings:
-        lines.append(text["headings"] + sep + ("；" if lang == "zh" else "; ").join(speak_node(h, lang).split("，" if lang == "zh" else ", ")[0] for h in headings[:12]))
+        # The whole name: a heading like "Profile, and privacy" must not stop at its comma.
+        lines.append(text["headings"] + sep + ("；" if lang == "zh" else "; ").join(h.name.strip() or text["unlabeled"] for h in headings[:12]))
     rest = [n for n in items if n.role != "heading"]
     if rest:
         lines.append(text["controls"] + sep)
@@ -193,8 +219,8 @@ def summarize(window: Node, focused: Node | None = None, *, lang: str = "en", ma
 def _with_items(n: Node, lang: str) -> str:
     if n.role not in ("list", "tree", "table"):
         return speak_node(n, lang)
-    kids = [c for c in n.children if "offscreen" not in c.states]
-    names = [c.name.strip() for c in kids if c.name.strip()]
+    kids = n.children  # all of them: a long list shows only some at a time, the rest are scrolled away
+    names = [c.name.strip() for c in kids if c.name.strip() and "offscreen" not in c.states]
     head = speak_node(n, lang)
     sep = "，" if lang == "zh" else ", "
     shown = sep.join(names[:5]) + (sep + "…" if len(names) > 5 else "")
@@ -216,7 +242,23 @@ def _counts(counts: dict[str, int], unnamed_images: int, lang: str) -> str:
             if r == "image" and unnamed_images:
                 part += f"（{unnamed_images} 个没有描述）" if lang == "zh" else f" ({unnamed_images} without a description)"
             parts.append(part)
+    if not parts:
+        return ""
     return ("、" if lang == "zh" else ", ").join(parts) + ("。" if lang == "zh" else ".")
+
+
+def _plural(word: str, n: int) -> str:
+    return word if n == 1 else word + ("es" if word.endswith(("x", "s", "ch")) else "s")
+
+
+def content(window: Node) -> Node:
+    """A browser's (or an Electron app's) page, without its toolbars, address bar and pop-ups: the
+    largest document in the window, under the window's name. Other windows are returned as they are."""
+    documents = [n for n, _ in window.walk() if n.role == "document" and n is not window]
+    if not documents:
+        return window
+    page = max(documents, key=lambda d: (d.bbox[2] * d.bbox[3]) if d.bbox else 0)
+    return Node(role="window", name=window.name, bbox=window.bbox, children=[page])
 
 
 @dataclass(frozen=True)
@@ -228,9 +270,32 @@ class Issue:
 
 
 def _path(path: tuple[Node, ...], n: Node) -> str:
+    """Where an element is, short enough to follow by ear: the window, named ancestors, and the element.
+    Nameless layout panes in between are left out ("pane > pane > pane" says nothing)."""
     def label(x: Node) -> str:
         return f"{x.role} '{x.name}'" if x.name else x.role
-    return " > ".join(label(x) for x in (*path, n))
+    keep = [x for i, x in enumerate(path) if i == 0 or x.name.strip() or x.role not in CONTAINERS]
+    return " > ".join(label(x) for x in (*keep, n))
+
+
+def _small_and_crowded(n: Node, targets: list[Node], size: int) -> bool:
+    """WCAG 2.2, 2.5.8 (Target Size, Minimum): a target smaller than `size` px passes when a circle of
+    that diameter centred on it touches no other target and no other such circle (the spacing
+    exception). Only a small target crowded by others fails."""
+    x, y, w, h = n.bbox
+    if min(w, h) >= size:
+        return False
+    cx, cy, r = x + w / 2, y + h / 2, size / 2
+    for o in targets:
+        if o is n:
+            continue
+        ox, oy, ow, oh = o.bbox
+        nearest_x, nearest_y = min(max(cx, ox), ox + ow), min(max(cy, oy), oy + oh)
+        if (nearest_x - cx) ** 2 + (nearest_y - cy) ** 2 < r * r:
+            return True  # the circle reaches into another target
+        if min(ow, oh) < size and ((ox + ow / 2) - cx) ** 2 + ((oy + oh / 2) - cy) ** 2 < size * size:
+            return True  # two small targets whose circles overlap
+    return False
 
 
 def audit(root: Node, *, min_target: int = 24) -> list[Issue]:
@@ -238,6 +303,8 @@ def audit(root: Node, *, min_target: int = 24) -> list[Issue]:
     size in pixels (WCAG 2.2, 2.5.8: 24 by 24)."""
     issues: list[Issue] = []
     last_level = 0
+    targets = [n for n, p in root.walk() if n.role in INTERACTIVE and n.bbox and n.bbox[2] > 0 and n.bbox[3] > 0
+               and not ({"disabled", "offscreen"} & n.states) and not any("offscreen" in a.states for a in p)]
     for n, path in root.walk():
         if "offscreen" in n.states or any("offscreen" in p.states for p in path):
             continue
@@ -249,8 +316,10 @@ def audit(root: Node, *, min_target: int = 24) -> list[Issue]:
             issues.append(Issue("warning", "image-no-description", where, "image with no description (if it is decorative, it should be hidden from assistive technology)"))
         elif name and (name.lower() in GENERIC_NAMES or FILE_NAME.match(name)) and (n.role in INTERACTIVE or n.role == "image"):
             issues.append(Issue("warning", "meaningless-name", where, f"the name \"{name}\" does not say what this does or shows"))
-        if n.role in INTERACTIVE and n.bbox and "disabled" not in n.states and 0 < min(n.bbox[2], n.bbox[3]) < min_target:
-            issues.append(Issue("warning", "small-target", where, f"target is {n.bbox[2]}x{n.bbox[3]} px, under {min_target}x{min_target}"))
+        if n in targets and _small_and_crowded(n, targets, min_target):
+            issues.append(Issue("warning", "small-target", where,
+                                f"target is {n.bbox[2]}x{n.bbox[3]} px and too close to others: under {min_target}x{min_target}, "
+                                f"with no {min_target} px of space around it (WCAG 2.5.8)"))
         if n.role == "heading" and n.level:
             if last_level and n.level > last_level + 1:
                 issues.append(Issue("info", "heading-skip", where, f"heading level {n.level} follows level {last_level}"))
@@ -263,6 +332,7 @@ def audit(root: Node, *, min_target: int = 24) -> list[Issue]:
             seen[k] = seen.get(k, 0) + 1
         for (role, cname), count in seen.items():
             if count > 1:
-                issues.append(Issue("info", "duplicate-name", _path(path, n), f"{count} {role}s named \"{cname}\" side by side cannot be told apart"))
+                word = ROLE_WORDS["en"].get(role, role)
+                issues.append(Issue("info", "duplicate-name", _path(path, n), f"{count} {_plural(word, count)} named \"{cname}\" side by side cannot be told apart"))
     order = {"error": 0, "warning": 1, "info": 2}
     return sorted(issues, key=lambda i: order[i.severity])
