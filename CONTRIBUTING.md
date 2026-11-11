@@ -9,8 +9,9 @@ what a screen reader says for the same window.
 ```bash
 git clone https://github.com/zch6a/kanjian && cd kanjian
 uv venv && uv pip install -e . pytest ruff
-uv run pytest            # about 85 tests; no model, no screen reader and no audio device needed
-uv run ruff check src tests
+uv run pytest            # about 100 tests; no model, no screen reader and no audio device needed
+uv run ruff check src tests scripts
+uv run python scripts/mutate.py   # plants each bug in its list in turn; every one must make a test fail
 ```
 
 The tests run on Windows, macOS and Linux. Those that need UI Automation or Windows' voices skip

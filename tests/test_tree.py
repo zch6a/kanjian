@@ -304,3 +304,66 @@ def test_only_controls_and_images_are_called_unlabeled():
     assert speak_node(n("list", ""), "zh") == "列表"
     assert speak_node(n("image", "")) == "unlabeled image"
     assert speak_node(n("link", ""), "zh") == "未标注的链接"
+
+
+def test_custom_controls_say_their_own_role_and_buttons_are_said_once():
+    assert speak_node(n("custom", "Stars", kind="rating")) == "Stars, rating"
+    w = n("window", "W", [n("button", "Send", children=[n("text", "Send"), n("image", "")])])
+    controls = [x.strip() for x in summarize(w)[summarize(w).index("Controls: ") + 1:]]
+    assert controls == ["Send, button"], "the text inside a button is its name, not a second line"
+
+
+def test_a_landmark_without_a_name_is_still_announced():
+    w = n("window", "Shop", [n("group", "", landmark="navigation", children=[n("link", "Home")]), n("group", "", [n("link", "Cart")])])
+    assert "Landmarks: navigation landmark" in summarize(w)
+    assert "区域：导航区" in summarize(w, lang="zh")
+
+
+def test_an_unlabeled_control_is_placed_by_a_control_not_by_the_group_around_it():
+    # the group's centre is the button's own centre, nearer than anything else: it must not be the landmark
+    w = n("window", "W", [n("group", "Toolbar", bbox=(480, 380, 60, 60), children=[n("button", "", bbox=(500, 400, 20, 20))]),
+                          n("button", "Buy", bbox=(560, 400, 60, 30))])
+    assert "unlabeled button, near 'Buy'" in [x.strip() for x in summarize(w)]
+
+
+def test_a_virtualized_table_says_its_real_size():
+    grid = n("table", "Orders", rows=4001, columns=3, children=[
+        n("dataitem", "", [n("headeritem", "Item"), n("headeritem", "Qty"), n("headeritem", "Price")]),
+        n("dataitem", "", [n("dataitem", "Tea"), n("dataitem", "2"), n("dataitem", "4.00")])])
+    assert "  Orders, table, 4001 rows, 3 columns: Item, Qty, Price; first row: Tea, 2, 4.00" in summarize(n("window", "W", [grid]))
+
+
+def test_the_page_is_the_largest_document_not_a_pop_up():
+    from kanjian.tree import content
+
+    w = n("window", "Shop - Browser", [n("document", "Sign in to sync", bbox=(900, 80, 300, 200)),
+                                       n("document", "Shop", bbox=(0, 80, 1200, 800))])
+    assert content(w).children[0].name == "Shop"
+
+
+def test_focusable_panes_count_only_on_a_web_page():
+    win32 = n("window", "App", [n("pane", "", focusable=True)])  # Win32 calls every child window focusable
+    assert not [i for i in audit(win32) if i.rule == "no-name"]
+    page = n("window", "Shop", [n("document", "Shop", [n("group", "", focusable=True)])])  # <div tabindex=0>
+    assert [i.severity for i in audit(page) if i.rule == "no-name"] == ["warning"]
+
+
+def test_a_link_is_in_a_sentence_only_next_to_its_text():
+    far = n("window", "W", [n("text", "Our returns policy", bbox=(0, 0, 150, 20)), n("link", "click here", bbox=(700, 0, 70, 20))])
+    assert [i.severity for i in audit(far) if i.rule == "meaningless-name"] == ["warning"]
+
+
+def test_footnote_links_in_a_sentence_are_exempt_from_target_size():
+    links = [n("link", "1", bbox=(62, 0, 10, 16)), n("link", "2", bbox=(76, 0, 10, 16))]
+    alone = n("window", "W", links)
+    assert len([i for i in audit(alone) if i.rule == "small-target"]) == 2
+    sentence = n("window", "W", [n("text", "See notes", bbox=(0, 0, 60, 16)), *links])
+    assert not [i for i in audit(sentence) if i.rule == "small-target" and "'1'" in i.path]
+
+
+def test_heading_levels_that_go_one_down_are_fine_and_errors_come_first():
+    w = n("window", "W", [n("heading", "A", level=1), n("heading", "B", level=2), n("heading", "C", level=3), n("heading", "D", level=2),
+                          n("link", "more"), n("button", "")])
+    issues = audit(w)
+    assert not [i for i in issues if i.rule == "heading-skip"]
+    assert [i.severity for i in issues] == ["error", "warning"], "the error is listed first though it comes later"

@@ -157,3 +157,40 @@ First run, error messages, help, performance, docs and a read-through of all the
 - README: install with `pip`, `uv tool` or `pipx`; the table example and the audit summary match what kanjian now says.
 - Dependencies: pip-audit finds nothing in the installed versions. The Pillow floor is raised to 10.3, because 10.0 to 10.2 have known fixes missing (CVE-2023-50447, CVE-2024-28219).
 - 89 tests, ruff clean.
+
+## Round 5
+
+Testing the tests, and the release. A mutation runner (`scripts/mutate.py`, after livesub's) plants one plausible bug at a time in a copy of the code and checks that a test fails. It covers:
+- how an element is said;
+- reading order;
+- tables and pages;
+- each audit rule;
+- the UIA mapping;
+- the CLI's safety checks (never read the terminal; check the model before capturing);
+- the vision client's privacy guards;
+- the speech fallbacks.
+
+Each original must appear exactly once in its file, and the runner refuses to start if the unmutated suite fails, or if kanjian is imported from somewhere other than the copy.
+
+**First run: 45 of 66 caught.** The 21 survivors were real gaps:
+- **The UIA mapping had no test of its own (8 mutants).** The only UIA test reads a plain Win32 window, which has no ARIA roles, landmarks, grids or range values. The new `tests/test_uia_mapping.py` feeds `Reader.node()` fake elements carrying the values real providers report, including the misleading defaults: Win32 says ToggleState 2 on every plain button, `IsDataValidForForm` is False everywhere, and `ValueIsReadOnly` is True without a Value pattern. It runs on every platform.
+- **Rules that no test exercised:**
+  - a custom control's own role ("Stars, rating");
+  - a button's inner text read a second time;
+  - a landmark with no name;
+  - a group used as an unlabeled control's landmark;
+  - a virtualized table's real row count;
+  - choosing the largest document over a pop-up;
+  - Win32 panes versus web pages for "focusable with no name";
+  - how near a link must be to its text to count as part of a sentence;
+  - footnote links in a sentence being exempt from target size;
+  - level 1 to 2 not being a skip;
+  - errors listed first;
+  - display scaling read from the window.
+- **Metadata stripping**: removing the "rebuild from raw pixels" step went unnoticed, because the test image carried no ICC profile, and Pillow writes one into a PNG by default (a profile can name the camera or screen). The test now gives the image a real sRGB profile.
+
+**Second run of the 21: all caught. 66 of 66.**
+
+**Promises in the README**, checked one by one against the code and the tests. `uv tool install git+https://github.com/zch6a/kanjian` installs from GitHub with comtypes and Pillow, and runs. The Status section now says what was really tested: synthetic trees, the tests' own Win32 window, the hand-made WinForms form and Edge page, and the mutation runner. What was not tested is still NVDA's speech and a real vision model, since neither is on the test machine.
+
+Release: CHANGELOG for 0.1.0, tag `v0.1.0`. CI lints `scripts` too. 106 tests, ruff clean.

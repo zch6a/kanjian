@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-11-12)
 
 First version.
 
@@ -21,3 +21,5 @@ First version.
 - Speech through NVDA when it is running, otherwise Windows' voices, otherwise printed text.
 - `kanjian dump`: save a window's tree for bug reports and tests.
 - English and Chinese output (`--lang zh`).
+- For contributors: `scripts/mutate.py` plants a bug in each reading and audit rule in turn and
+  checks that a test catches it.

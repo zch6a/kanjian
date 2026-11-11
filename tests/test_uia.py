@@ -126,3 +126,14 @@ def test_a_control_is_cut_out_of_its_window():
         assert b > 150 and r < 80, "a piece of the blue window"
     finally:
         w.close()
+
+
+def test_the_window_knows_its_display_scaling(window):
+    import ctypes
+
+    from kanjian.uia import Reader
+    from kanjian.windows import set_dpi_aware
+
+    set_dpi_aware()
+    dpi = ctypes.windll.user32.GetDpiForWindow(window.hwnd)
+    assert Reader().window(window.hwnd).scale == dpi / 96  # 1.5 at 150%: target sizes are judged in effective pixels

@@ -179,3 +179,13 @@ def test_a_model_slow_to_answer_is_told_apart_from_a_missing_one():
             VisionClient(f"http://127.0.0.1:{server.server_port}/v1", "m", timeout=0.5).describe(picture(64, 48))
     finally:
         server.shutdown()
+
+
+def test_a_colour_profile_does_not_go_along():
+    # Pillow writes an image's ICC profile into a PNG by default; a profile can name the camera or screen.
+    from PIL import ImageCms
+
+    im = Image.new("RGB", (40, 30), "white")
+    im.info["icc_profile"] = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    out = Image.open(io.BytesIO(prepare_image(im)))
+    assert "icc_profile" not in out.info

@@ -134,13 +134,17 @@ and Electron shells. No automatic check replaces testing with a screen reader.
 
 ## Status
 
-0.1, in development.
+0.1.0, the first version. Windows 10 and 11; `kanjian describe` also runs on macOS and Linux.
 
 **Tested:**
-- Reading the tree, the summary and the audit: on synthetic trees, and on a real Win32 window that
-  the tests open themselves (nothing of the user's is read).
-- Windows' voices: the tests speak to a WAV file.
-- The vision client: against a stand-in endpoint.
+- Reading the tree, the summary and the audit: on synthetic trees, on a real Win32 window that the
+  tests open themselves, and by hand on a WinForms form and an HTML page in Edge made for the purpose
+  (never on the tester's own windows). Pages of 20,000 elements read in about 3 s.
+- The audit's rules: checked against WCAG 2.2, WCAG2ICT and NVDA's wording, and against false positives
+  on those two windows. A mutation runner (`scripts/mutate.py`) plants a bug in each rule in turn and
+  checks that a test catches it.
+- Windows' voices: the tests speak to a WAV file. Machines with no audio device fall back to text.
+- The vision client: against a stand-in endpoint, including what is sent (size, no metadata, no proxy).
 
 **Not yet tested by the author:** speech through NVDA (not installed on the test machine), and a real
 vision model (none installed there). See [POLISH_LOG.md](POLISH_LOG.md).
