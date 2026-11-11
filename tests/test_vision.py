@@ -13,15 +13,15 @@ from kanjian.vision import RemoteNotAllowed, VisionClient, VisionError, clean_re
 class FakeVLM:
     """A local OpenAI-compatible endpoint that records what it is sent."""
 
-    def __init__(self, reply="A login form with two fields."):
-        self.reply, self.requests = reply, []
+    def __init__(self, reply="A login form with two fields.", status=200, body=None):
+        self.reply, self.requests, self.status, self.body = reply, [], status, body
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 fake.requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
-                data = json.dumps({"choices": [{"message": {"content": fake.reply}}]}).encode()
-                self.send_response(200)
+                data = fake.body or json.dumps({"choices": [{"message": {"content": fake.reply}}]}).encode()
+                self.send_response(fake.status)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
@@ -127,26 +127,12 @@ def test_no_model_running_says_what_to_install():
 
 
 def test_a_model_that_is_not_pulled_says_so():
-    fake = FakeVLM()
-
-    class Handler404(BaseHTTPRequestHandler):
-        def do_POST(self):
-            body = b'{"error":{"message":"model \\"llava\\" not found, try pulling it first"}}'
-            self.send_response(404)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *a):
-            pass
-
-    fake.server.RequestHandlerClass = Handler404
+    fake = FakeVLM(status=404, body=b'{"error":{"message":"model \\"llava\\" not found, try pulling it first"}}')
     try:
         with pytest.raises(VisionError, match="ollama pull llava"):
             VisionClient(fake.url, "llava").describe(picture(64, 48))
     finally:
         fake.close()
-
 
 def test_a_name_that_only_looks_local_is_not():
     assert not is_local("http://127.attacker.example/v1") and not is_local("http://localhost.attacker.example/v1")

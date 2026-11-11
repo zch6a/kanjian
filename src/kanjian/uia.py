@@ -52,8 +52,16 @@ def _automation():
 P_BOUNDS, P_HWND = 30001, 30020
 P_TOGGLE_AVAILABLE = 30041  # without it, the toggle state of a plain button reads as 2, "indeterminate"
 P_ARIA_ROLE = 30101  # a web page's own role: Edge reports <th> as a plain data item, but its ARIA role says "columnheader"
+P_FOCUSABLE, P_LOCALIZED_TYPE, P_ARIA_PROPERTIES = 30009, 30004, 30102
+P_VALUE_AVAILABLE, P_SELECTION_ITEM_AVAILABLE = 30043, 30036
+P_RANGE_AVAILABLE, P_RANGE_VALUE, P_RANGE_MIN, P_RANGE_MAX = 30033, 30047, 30049, 30050
+P_GRID_AVAILABLE, P_ROWS, P_COLUMNS = 30030, 30062, 30063
+P_LANDMARK, P_LANDMARK_NAME = 30157, 30158
+LANDMARKS = {80000: "", 80001: "form", 80002: "main", 80003: "navigation", 80004: "search"}
 PROPERTIES = (P_NAME, P_CONTROL_TYPE, P_ENABLED, P_OFFSCREEN, P_FOCUS, P_HELP, P_AUTOMATION_ID, P_REQUIRED,
-              P_VALUE, P_READONLY, P_TOGGLE, P_TOGGLE_AVAILABLE, P_EXPAND, P_SELECTED, P_HEADING_LEVEL, P_BOUNDS, P_ARIA_ROLE)
+              P_VALUE, P_READONLY, P_TOGGLE, P_TOGGLE_AVAILABLE, P_EXPAND, P_SELECTED, P_HEADING_LEVEL, P_BOUNDS, P_ARIA_ROLE,
+              P_FOCUSABLE, P_LOCALIZED_TYPE, P_ARIA_PROPERTIES, P_VALUE_AVAILABLE, P_SELECTION_ITEM_AVAILABLE, P_RANGE_AVAILABLE,
+              P_RANGE_VALUE, P_RANGE_MIN, P_RANGE_MAX, P_GRID_AVAILABLE, P_ROWS, P_COLUMNS, P_LANDMARK, P_LANDMARK_NAME)
 TREE_SCOPE_SUBTREE = 7  # the element, its children and all descendants
 
 
@@ -77,7 +85,14 @@ class Reader:
         self.cache.TreeFilter = self.uia.ControlViewCondition
 
     def window(self, hwnd: int) -> Node:
-        return self.read(self.uia.ElementFromHandle(hwnd))
+        tree = self.read(self.uia.ElementFromHandle(hwnd))
+        try:  # physical pixels per effective pixel: WCAG's 24 px target size is in effective pixels
+            import ctypes
+
+            tree.scale = (ctypes.windll.user32.GetDpiForWindow(hwnd) or 96) / 96
+        except (AttributeError, OSError):
+            tree.scale = 1.0
+        return tree
 
     def focus_in(self, hwnd: int) -> Node | None:
         """The element with the keyboard focus, if it is inside the window `hwnd`; None otherwise."""
@@ -189,8 +204,17 @@ class Reader:
             states.add("focused")
         if get(P_REQUIRED, False):
             states.add("required")
+        # IsDataValidForForm reads False on every plain Win32 control, valid or not, so the invalid state
+        # comes from the page's own aria-invalid (a web form) instead.
+        if "invalid=true" in str(get(P_ARIA_PROPERTIES, "") or "").lower().replace(" ", ""):
+            states.add("invalid")
         toggle = get(P_TOGGLE, None) if get(P_TOGGLE_AVAILABLE, False) else None
-        if isinstance(toggle, int) and role in ("checkbox", "radio", "button", "menuitem", "listitem", "treeitem"):
+        if role == "radio":
+            # A radio button never has the Toggle pattern; it is chosen when it is selected. Screen readers
+            # say "checked" and "not checked" (NVDA), so the negative state is said too.
+            states.add("checked" if get(P_SELECTED, False) else "unchecked")
+            toggle = None
+        if isinstance(toggle, int) and role in ("checkbox", "button", "menuitem", "listitem", "treeitem"):
             if role == "button":  # a toggle button: "pressed", as screen readers say
                 states.add("pressed" if toggle == 1 else "mixed" if toggle == 2 else "not_pressed")
             else:
@@ -200,13 +224,28 @@ class Reader:
             states.add("collapsed")
         elif expand == 1:
             states.add("expanded")
-        if get(P_SELECTED, False):
+        if get(P_SELECTED, False) and role != "radio":
             states.add("selected")
-        value = get(P_VALUE, "") or ""
-        if role == "edit" and get(P_READONLY, False):
+        value = get(P_VALUE, "") or "" if get(P_VALUE_AVAILABLE, False) else ""
+        # ValueIsReadOnly defaults to TRUE when there is no Value pattern: ask only where there is one.
+        if role == "edit" and get(P_VALUE_AVAILABLE, False) and get(P_READONLY, False):
             states.add("readonly")
-        if str(get(P_ARIA_ROLE, "") or "").lower() in ("columnheader", "rowheader"):
+        if not value and get(P_RANGE_AVAILABLE, False):  # sliders and progress bars often have only a range value
+            number = get(P_RANGE_VALUE, None)
+            if isinstance(number, (int, float)):
+                value = f"{number:g}"
+        aria = str(get(P_ARIA_ROLE, "") or "").lower()
+        if aria == "columnheader":
             role = "headeritem"
+        elif aria == "rowheader":
+            role = "rowheader"
+        landmark = ""
+        landmark_type = get(P_LANDMARK, 0)
+        if landmark_type in LANDMARKS:
+            landmark = str(get(P_LANDMARK_NAME, "") or "") or LANDMARKS[landmark_type] or "landmark"
+        rows = columns = None
+        if get(P_GRID_AVAILABLE, False):
+            rows, columns = get(P_ROWS, None), get(P_COLUMNS, None)
         level = None
         heading = get(P_HEADING_LEVEL, 0)
         if isinstance(heading, int) and HEADING_1 <= heading <= HEADING_1 + 8:
@@ -218,5 +257,9 @@ class Reader:
                 bbox = tuple(int(round(v)) for v in bounds)
         except TypeError:
             bbox = None
+        focusable = get(P_FOCUSABLE, None)
         return Node(role=role, name=str(get(P_NAME, "") or ""), value=str(value), description=str(get(P_HELP, "") or ""),
-                    states=states, bbox=bbox, level=level, automation_id=str(get(P_AUTOMATION_ID, "") or ""))
+                    states=states, bbox=bbox, level=level, automation_id=str(get(P_AUTOMATION_ID, "") or ""),
+                    focusable=bool(focusable) if focusable is not None else None, landmark=landmark,
+                    kind=str(get(P_LOCALIZED_TYPE, "") or ""), rows=rows if isinstance(rows, int) else None,
+                    columns=columns if isinstance(columns, int) else None)

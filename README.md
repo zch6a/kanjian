@@ -99,6 +99,32 @@ finished speaking), and with `--say text`, the default outside `watch`, it print
 The vision model is set with `--vlm-url` and `--vlm-model`, or `KANJIAN_VLM_URL`, `KANJIAN_VLM_MODEL`
 and `KANJIAN_VLM_API_KEY`. The default is Ollama at `http://localhost:11434/v1` with `qwen2.5vl:3b`.
 
+## Audit rules
+
+`kanjian audit` reads what Windows UI Automation exposes, the same tree a screen reader uses. Each
+finding names the WCAG 2.2 success criterion it fails, where there is one; in SARIF output that is the
+result's `properties.wcag`, with a link to the W3C's explanation.
+
+| Rule | Severity | WCAG | What it finds |
+|---|---|---|---|
+| `no-name` | error | 4.1.2 | a control with no accessible name (a screen reader says only "button"); a warning for a custom control, list or table that takes the focus with no name |
+| `image-no-description` | warning | 1.1.1 | an image with no text alternative; it may be decorative, so check it |
+| `meaningless-name` | error for images, warning, or info | 1.1.1, 2.4.4, 2.4.6, 2.4.9 | "IMG_2041.JPG" on an image (F30), "click here" on a link (info when the sentence around it says where it goes), "DataGridView" on a table |
+| `class-like-name` | warning | 2.4.6 | "MyApp.Models.Person": the program shows an object instead of its text |
+| `keyboard-unreachable` | warning | 2.1.1 | a control that cannot take the keyboard focus (toolbars, menus, lists and tab lists, which move with arrow keys, are left out) |
+| `small-target` | warning; info for a spin box's arrows | 2.5.8 | a target under 24 by 24 effective pixels that is crowded by others. Display scaling is taken into account, page zoom is not; links in a sentence are exempt |
+| `duplicate-name` | warning when you tab through them, else info | | controls side by side with the same role and name |
+| `name-includes-role` | info | | "Save button", which is heard as "Save button, button" |
+| `heading-skip` | info | | a heading level is skipped: best practice, not a WCAG failure |
+
+Elements scrolled out of view are checked for names (a screen reader reaches them) but not for size.
+
+**What it cannot tell you.** It sees names, roles and states, not how things look: colour contrast,
+focus visibility, reflow and anything that needs judgement are not checked. For a web page, UIA shows
+the page through the browser, so the audit is an approximation: use a browser tool such as
+[axe-core](https://github.com/dequelabs/axe-core) on web content, and kanjian on desktop applications
+and Electron shells. No automatic check replaces testing with a screen reader.
+
 ## Status
 
 0.1, in development.

@@ -19,8 +19,12 @@ from dataclasses import dataclass, field
 INTERACTIVE = {"button", "link", "checkbox", "radio", "combobox", "edit", "menuitem", "tabitem", "slider",
                "spinner", "listitem", "treeitem", "hyperlink", "splitbutton"}
 CONTAINERS = {"pane", "group", "custom", "unknown", "window"}
-GENERIC_NAMES = {"button", "image", "icon", "link", "click", "click here", "here", "more", "picture", "graphic",
-                 "untitled", "control", "item", "图片", "图像", "按钮", "链接", "点击", "这里", "更多"}
+GENERIC_NAMES = {"button", "image", "icon", "link", "click", "click here", "here", "more", "read more", "learn more", "details",
+                 "picture", "graphic", "untitled", "control", "item", "图片", "图像", "按钮", "链接", "点击", "这里", "更多",
+                 "了解更多", "详情", "查看更多", "阅读更多", "点击这里"}
+ROLE_IN_NAME = {"button": ("button", "按钮"), "link": ("link", "链接"), "hyperlink": ("link", "链接"), "image": ("image", "picture", "图片", "图像"),
+                "checkbox": ("checkbox", "check box", "复选框"), "tabitem": ("tab", "选项卡"), "edit": ("text box", "textbox", "输入框", "文本框")}
+CLASS_LIKE = re.compile(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*){2,}$")  # "MyApp.ViewModels.Item": a ToString() fallback, not a name
 CLASS_NAMES = {"datagridview", "listview", "treeview", "listbox", "panel", "groupbox", "picturebox", "tablelayoutpanel",
                "flowlayoutpanel", "richtextbox", "textbox", "combobox", "grid", "table", "tablix"}  # framework defaults, not names
 # What browsers put in place of a missing alt text: not a name, and the image has none.
@@ -40,6 +44,12 @@ class Node:
     level: int | None = None  # headings
     automation_id: str = ""
     children: list[Node] = field(default_factory=list)
+    focusable: bool | None = None  # reachable with the keyboard (None: not known, as in an old saved tree)
+    landmark: str = ""  # "navigation", "main", "search", "form", or the page's own name for one
+    kind: str = ""  # the control's own role name (UIA LocalizedControlType), for custom controls
+    rows: int | None = None  # tables: as the table reports them
+    columns: int | None = None
+    scale: float = 1.0  # on the window: physical pixels per effective pixel (1.5 at 150% display scaling)
 
     def walk(self, path: tuple[Node, ...] = ()):
         """Every node with the path of its ancestors, in tree order."""
@@ -58,13 +68,20 @@ class Node:
             description=str(d.get("description", "") or ""), states={str(s).lower() for s in d.get("states", [])},
             bbox=tuple(d["bbox"]) if d.get("bbox") else None, level=d.get("level"), automation_id=str(d.get("automation_id", "") or ""),
             children=[cls.from_dict(c) for c in d.get("children", [])],
+            focusable=d.get("focusable"), landmark=str(d.get("landmark", "") or ""), kind=str(d.get("kind", "") or ""),
+            rows=d.get("rows"), columns=d.get("columns"), scale=float(d.get("scale", 1.0) or 1.0),
         )
 
     def to_dict(self) -> dict:
         d: dict = {"role": self.role}
-        for k in ("name", "value", "description", "automation_id"):
+        for k in ("name", "value", "description", "automation_id", "landmark", "kind"):
             if getattr(self, k):
                 d[k] = getattr(self, k)
+        for k in ("focusable", "rows", "columns"):
+            if getattr(self, k) is not None:
+                d[k] = getattr(self, k)
+        if self.scale != 1.0:
+            d["scale"] = self.scale
         if self.states:
             d["states"] = sorted(self.states)
         if self.bbox:
@@ -84,6 +101,7 @@ ROLE_WORDS = {
            "menu": "menu", "menubar": "menu bar", "toolbar": "toolbar", "statusbar": "status bar", "document": "document",
            "tab": "tab list", "tree": "tree", "group": "group", "pane": "pane", "window": "window", "dialog": "dialog",
            "dataitem": "row", "header": "header", "headeritem": "column header", "calendar": "calendar", "custom": "",
+           "rowheader": "row header", "togglebutton": "toggle button",
            "appbar": "app bar", "semanticzoom": "", "unknown": ""},
     "zh": {"button": "按钮", "link": "链接", "hyperlink": "链接", "checkbox": "复选框", "radio": "单选按钮",
            "combobox": "组合框", "edit": "编辑框", "menuitem": "菜单项", "tabitem": "选项卡", "slider": "滑块",
@@ -92,32 +110,49 @@ ROLE_WORDS = {
            "menu": "菜单", "menubar": "菜单栏", "toolbar": "工具栏", "statusbar": "状态栏", "document": "文档",
            "tab": "选项卡列表", "tree": "树", "group": "分组", "pane": "窗格", "window": "窗口", "dialog": "对话框",
            "dataitem": "行", "header": "表头", "headeritem": "列标题", "calendar": "日历", "custom": "",
+           "rowheader": "行标题", "togglebutton": "切换按钮",
            "appbar": "应用栏", "semanticzoom": "", "unknown": ""},
 }
 STATE_WORDS = {
     "en": {"checked": "checked", "unchecked": "not checked", "disabled": "unavailable", "expanded": "expanded",
            "collapsed": "collapsed", "selected": "selected", "required": "required", "readonly": "read only",
-           "invalid": "invalid entry", "pressed": "pressed", "not_pressed": "not pressed", "mixed": "partially checked"},
+           "invalid": "invalid entry", "pressed": "pressed", "not_pressed": "not pressed", "mixed": "half checked",
+           "half_pressed": "half pressed"},
     "zh": {"checked": "已选中", "unchecked": "未选中", "disabled": "不可用", "expanded": "已展开", "collapsed": "已折叠",
-           "selected": "已选择", "required": "必填", "readonly": "只读", "invalid": "输入无效",
-           "pressed": "已按下", "not_pressed": "未按下", "mixed": "部分选中"},
+           "selected": "已选择", "required": "必填", "readonly": "只读", "invalid": "错误的输入",
+           "pressed": "已按下", "not_pressed": "未按下", "mixed": "部分选中", "half_pressed": "部分按下"},
 }
 TEXT = {
     "en": {"unlabeled": "unlabeled", "window": "Window", "focus": "Focus", "nothing_focused": "Nothing has the focus.",
            "headings": "Headings", "controls": "Controls", "more": "and {n} more", "items": "{n} items",
            "level": "level {n}", "no_problems": "No problems found.", "elsewhere": "The focus is in another window.",
-           "partial": "Only the first {n} elements were read; the window has more."},
-    "zh": {"unlabeled": "无标签的", "window": "窗口", "focus": "焦点", "nothing_focused": "没有元素获得焦点。",
+           "partial": "Only the first {n} elements were read; the window has more.", "landmarks": "Landmarks"},
+    "zh": {"unlabeled": "未标注的", "window": "窗口", "focus": "焦点", "nothing_focused": "没有元素获得焦点。",
            "headings": "标题", "controls": "控件", "more": "还有 {n} 个", "items": "{n} 项",
            "level": "{n} 级", "no_problems": "没有发现问题。", "elsewhere": "焦点在另一个窗口里。",
-           "partial": "只读了前 {n} 个元素，窗口里还有更多。"},
+           "partial": "只读了前 {n} 个元素，窗口里还有更多。", "landmarks": "区域"},
 }
 
 
+LANDMARK_WORDS = {"zh": {"navigation": "导航区", "main": "主要内容区", "search": "搜索区", "form": "表单区"}}
+
+
+def landmark_word(n: Node, lang: str) -> str:
+    if lang == "zh":
+        return LANDMARK_WORDS["zh"].get(n.landmark.lower(), f"{n.landmark}区域")
+    return n.landmark if "landmark" in n.landmark.lower() else f"{n.landmark} landmark"
+
+
 def speak_node(n: Node, lang: str = "en") -> str:
-    """One element as a screen reader would say it: "Save, button", "Remember me, check box, not checked"."""
+    """One element as a screen reader would say it: "Save, button", "Remember me, check box, not checked",
+    "Bold, toggle button, pressed" (NVDA's words)."""
     roles, states, text = ROLE_WORDS[lang], STATE_WORDS[lang], TEXT[lang]
-    role = roles.get(n.role, n.role)
+    toggle = n.role == "button" and bool({"pressed", "not_pressed", "mixed"} & n.states)
+    role = roles["togglebutton"] if toggle else roles.get(n.role, n.role)
+    if n.role in ("custom", "unknown", "group", "pane") and n.landmark:
+        role = landmark_word(n, lang)
+    elif n.role in ("custom", "unknown") and n.kind:
+        role = n.kind  # the control's own role name, such as "rating" or "carousel"
     if n.role == "heading" and n.level:
         role = f"{role} {text['level'].format(n=n.level)}"
     if n.name.strip():
@@ -126,8 +161,9 @@ def speak_node(n: Node, lang: str = "en") -> str:
         parts = [f"{text['unlabeled']}{'' if lang == 'zh' else ' '}{role}".strip()]
     if n.value and n.value != n.name and n.role in ("edit", "combobox", "slider", "spinner", "progressbar"):
         parts.append(n.value)
-    parts += [states[s] for s in ("checked", "unchecked", "mixed", "pressed", "not_pressed", "selected", "expanded", "collapsed",
-                                  "required", "readonly", "invalid", "disabled") if s in n.states]
+    shown = {"half_pressed"} | n.states - {"mixed"} if toggle and "mixed" in n.states else n.states
+    parts += [states[s] for s in ("checked", "unchecked", "mixed", "half_pressed", "pressed", "not_pressed", "selected", "expanded",
+                                  "collapsed", "required", "readonly", "invalid", "disabled") if s in shown]
     sep = "，" if lang == "zh" else ", "
     return sep.join(p for p in parts if p)
 
@@ -142,6 +178,8 @@ def _meaningful(n: Node) -> bool:
         return bool(n.name.strip())
     if n.role in ("group", "dialog") and n.name.strip():
         return True  # "Network, group": it says what the controls inside are about
+    if n.landmark:
+        return True  # "Main, navigation landmark"
     return n.role not in CONTAINERS and bool(n.name.strip())
 
 
@@ -242,6 +280,9 @@ def summarize(window: Node, focused: Node | None = None, *, lang: str = "en", ma
     counted = _counts(counts, unnamed_images, lang)
     if counted:
         lines.append(counted)
+    landmarks = [n for n in items if n.landmark]
+    if landmarks:
+        lines.append(text["landmarks"] + sep + ("；" if lang == "zh" else "; ").join(speak_node(n, lang) for n in landmarks[:10]))
     headings = [n for n in items if n.role == "heading"]
     if headings:
         # The whole name: a heading like "Profile, and privacy" must not stop at its comma.
@@ -286,7 +327,7 @@ HEADER_ROLES = ("header", "headeritem")
 
 
 def _table(n: Node, lang: str) -> str:
-    """"Orders, table, 3 rows, columns: Item, Quantity, Price; first row: Tea, 2, 4.00": what a listener
+    """"Orders, table, 4 rows, 3 columns: Item, Quantity, Price; first row: Tea, 2, 4.00": what a listener
     needs before going into a table, instead of the framework's row names."""
     sep = "，" if lang == "zh" else ", "
     rows = [r for r in n.children if r.children]
@@ -299,12 +340,17 @@ def _table(n: Node, lang: str) -> str:
         columns = [(c.value or c.name).strip() for c in valued] if valued else [x for x in cells if x]
     data = [r for r in rows if r is not header]
     head = speak_node(n, lang)
-    parts = [head, f"{len(data)} 行" if lang == "zh" else f"{len(data)} {'row' if len(data) == 1 else 'rows'}"]
-    out = sep.join(parts)
+    # As NVDA says it, "table with 3 rows and 3 columns": the header row counts. The table's own count
+    # (UIA Grid pattern) wins: a virtualized grid holds only the rows on screen.
+    n_rows = n.rows if n.rows else len(rows)
+    n_cols = n.columns if n.columns else (len(columns) or max((len([c for c in r.children if c.role != "rowheader"]) for r in rows), default=0))
+    out = sep.join([head, f"{n_rows} 行" if lang == "zh" else f"{n_rows} {'row' if n_rows == 1 else 'rows'}"])
+    if n_cols:
+        out += sep + (f"{n_cols} 列" if lang == "zh" else f"{n_cols} {'column' if n_cols == 1 else 'columns'}")
     if columns:
-        out += ("，列：" if lang == "zh" else ", columns: ") + sep.join(columns)
+        out += ("：" if lang == "zh" else ": ") + sep.join(columns)
     if data:
-        first = [c.value.strip() or c.name.strip() for c in data[0].children if c.role not in HEADER_ROLES]
+        first = [c.value.strip() or c.name.strip() for c in data[0].children if c.role != "headeritem" and c.role != "header"]
         if any(first):
             out += ("；第一行：" if lang == "zh" else "; first row: ") + sep.join(x for x in first if x)
     return out
@@ -363,6 +409,27 @@ class Issue:
     rule: str
     path: str
     message: str
+    wcag: str = ""  # the success criterion it fails, such as "1.1.1"; empty for best practice
+
+
+# The WCAG 2.2 success criteria the rules point to, with the page that explains each.
+CRITERIA = {"1.1.1": "non-text-content", "2.1.1": "keyboard", "2.4.4": "link-purpose-in-context", "2.4.6": "headings-and-labels",
+            "2.4.9": "link-purpose-link-only", "2.5.8": "target-size-minimum", "4.1.2": "name-role-value"}
+RULES = {
+    "no-name": "A control, or anything that takes the focus, has no accessible name",
+    "image-no-description": "An image has no text alternative",
+    "meaningless-name": "A name that does not say what the thing does or shows",
+    "class-like-name": "A name that is a program's class name, such as MyApp.Models.Item",
+    "name-includes-role": "A name that repeats the control's role, such as \"Save button\"",
+    "keyboard-unreachable": "A control that the keyboard cannot reach",
+    "small-target": "A target under 24 by 24 px that is too close to others",
+    "duplicate-name": "Controls side by side with the same role and name",
+    "heading-skip": "A heading level is skipped (best practice)",
+}
+
+
+def understanding_url(sc: str) -> str:
+    return f"https://www.w3.org/WAI/WCAG22/Understanding/{CRITERIA[sc]}.html" if sc in CRITERIA else ""
 
 
 def _path(path: tuple[Node, ...], n: Node) -> str:
@@ -374,7 +441,7 @@ def _path(path: tuple[Node, ...], n: Node) -> str:
     return " > ".join(label(x) for x in (*keep, n))
 
 
-def _small_and_crowded(n: Node, targets: list[Node], size: int) -> bool:
+def _small_and_crowded(n: Node, targets: list[Node], size: float) -> bool:
     """WCAG 2.2, 2.5.8 (Target Size, Minimum): a target smaller than `size` px passes when a circle of
     that diameter centred on it touches no other target and no other such circle (the spacing
     exception). Only a small target crowded by others fails."""
@@ -394,48 +461,145 @@ def _small_and_crowded(n: Node, targets: list[Node], size: int) -> bool:
     return False
 
 
+def _in_sentence(n: Node, siblings: list[Node]) -> bool:
+    """A link in a line of text ("To read our policy, click here."): 2.5.8 exempts it (its size is set
+    by the line height), and 2.4.4 lets the sentence around it tell what it does."""
+    if n.role not in ("link", "hyperlink") or not n.bbox:
+        return False
+    for s in siblings:
+        if s is not n and s.role == "text" and s.name.strip() and _same_line(s, n):
+            gap = max(s.bbox[0] - (n.bbox[0] + n.bbox[2]), n.bbox[0] - (s.bbox[0] + s.bbox[2]))
+            if gap <= max(n.bbox[3], s.bbox[3]):
+                return True
+    return False
+
+
+def _names_its_role(n: Node, name: str) -> bool:
+    """"Save button": a screen reader says the role itself, so the user hears "Save button, button"."""
+    low = name.lower()
+    for word in ROLE_IN_NAME.get(n.role, ()):
+        if word.isascii():
+            # "Save button", "Image of a dog"; but "Button bar" is the name of a thing, not a role said twice
+            if low != word and (low.endswith(" " + word) or (n.role == "image" and low.startswith(word + " of "))):
+                return True
+        elif low != word and low.endswith(word):
+            return True
+    return False
+
+
+def _class_like(name: str) -> bool:
+    return bool(CLASS_LIKE.match(name) and re.search(r"\.[A-Z]", name))  # MyApp.Models.Item, not www.example.com
+
+
+def offscreen(n: Node, path: tuple[Node, ...]) -> bool:
+    return "offscreen" in n.states or any("offscreen" in a.states for a in path)
+
+
+# Controls whose parts are one target: the drop-down arrow of a combo box opens it as the box does,
+# a slider's thumb moves along its track, and a scroll bar belongs to the platform.
+WHOLE = ("combobox", "slider", "scrollbar")
+# A spin box's arrows and a split button's drop-down part are targets of their own, but sized by the
+# platform, not the program (WCAG2ICT reads 2.5.8's user-agent exception this way): worth a look.
+PARTS = ("spinner", "splitbutton")
+# Where the keyboard moves with arrow keys or shortcuts rather than Tab, so a part that is not
+# focusable on its own is still reachable.
+ARROW_KEYS = ("titlebar", "scrollbar", "toolbar", "menubar", "menu", "tab", "list", "tree", "table", "dataitem", "radio") + WHOLE + PARTS
+FOCUS_NEEDS_NAME = ("custom", "unknown", "list", "tree", "table")
+
+
 def audit(root: Node, *, min_target: int = 24) -> list[Issue]:
     """Problems a blind or keyboard user would hit, most serious first. `min_target`: the smallest target
-    size in pixels (WCAG 2.2, 2.5.8: 24 by 24)."""
+    size in effective pixels (WCAG 2.2, 2.5.8: 24 by 24); at 150% display scaling that is 36 screen pixels.
+
+    Elements scrolled out of view are checked for names (a screen reader reaches them) but not for size."""
     issues: list[Issue] = []
     last_level = 0
-    # A combo box's drop-down arrow or a spin box's arrows are parts of one control, not targets of
-    # their own (they were flagged as too small on a plain WinForms combo box).
-    compound = ("combobox", "spinner", "slider", "splitbutton", "scrollbar")
-    targets = [n for n, p in root.walk() if n.role in INTERACTIVE and n.bbox and n.bbox[2] > 0 and n.bbox[3] > 0
-               and not ({"disabled", "offscreen"} & n.states) and not any("offscreen" in a.states for a in p)
-               and not any(a.role in compound for a in p)]
+    scale = root.scale or 1.0
+    size = min_target * scale
+
+    def reachable(n: Node, path: tuple[Node, ...]) -> bool:
+        return bool(n.bbox and n.bbox[2] > 0 and n.bbox[3] > 0 and not ({"disabled"} & n.states) and not offscreen(n, path))
+
+    parents = {id(c): p for p, _ in root.walk() for c in p.children}
+    targets = [n for n, p in root.walk() if n.role in INTERACTIVE and reachable(n, p) and not any(a.role in WHOLE for a in p)]
     for n, path in root.walk():
-        if "offscreen" in n.states or any("offscreen" in p.states for p in path):
-            continue
         name = n.name.strip()
-        where = _path(path, n)
-        if n.role in INTERACTIVE and not name:
-            issues.append(Issue("error", "no-name", where, f"this {ROLE_WORDS['en'].get(n.role, n.role)} has no accessible name: a screen reader can only say \"{ROLE_WORDS['en'].get(n.role, n.role)}\""))
-        elif n.role == "image" and not name and not n.description and not any(a.role in INTERACTIVE for a in path):
+        hidden = offscreen(n, path)
+        where = _path(path, n) + (" (off screen)" if hidden else "")
+        role_word = ROLE_WORDS["en"].get(n.role, n.role) or n.kind or n.role
+        siblings = parents[id(n)].children if id(n) in parents else []
+        inside_control = any(a.role in INTERACTIVE or (a.focusable and a.role in ("custom", "unknown")) for a in path)
+        # Win32's accessibility proxy calls every child window focusable, so a plain pane or group is
+        # trusted only on a web page; a tab list hands the focus to its selected tab.
+        in_page = any(a.role == "document" for a in path)
+        takes_focus = n.focusable and not n.landmark and (n.role in FOCUS_NEEDS_NAME or (in_page and n.role in ("group", "pane")))
+        if not name and (n.role in INTERACTIVE or takes_focus):
+            if n.role in INTERACTIVE:
+                issues.append(Issue("error", "no-name", where,
+                                    f"this {role_word} has no accessible name: a screen reader can only say \"{role_word}\"", "4.1.2"))
+            else:
+                issues.append(Issue("warning", "no-name", where,
+                                    f"this {role_word} takes the keyboard focus but has no name: the user lands on it and hears nothing useful", "4.1.2"))
+        elif n.role == "image" and not name and not n.description and not inside_control:
             # (an icon inside a button is the button's business: its missing name is reported there)
-            issues.append(Issue("warning", "image-no-description", where, "image with no description (if it is decorative, it should be hidden from assistive technology)"))
+            issues.append(Issue("warning", "image-no-description", where,
+                                "image with no text alternative (if it is decorative, it should be hidden from assistive technology)", "1.1.1"))
         elif name and n.role in ("table", "list", "tree") and name.lower().replace(" ", "") in CLASS_NAMES:
-            issues.append(Issue("warning", "meaningless-name", where, f"the name \"{name}\" is the control's class, not what it holds"))
+            issues.append(Issue("warning", "meaningless-name", where, f"the name \"{name}\" is the control's class, not what it holds", "2.4.6"))
+        elif name and _class_like(name):
+            issues.append(Issue("warning", "class-like-name", where,
+                                f"the name \"{name}\" is a class name (the program shows an object, not its text)", "2.4.6"))
         elif name and (name.lower() in GENERIC_NAMES or FILE_NAME.match(name)) and (n.role in INTERACTIVE or n.role == "image"):
-            issues.append(Issue("warning", "meaningless-name", where, f"the name \"{name}\" does not say what this does or shows"))
-        if n in targets and _small_and_crowded(n, targets, min_target):
-            issues.append(Issue("warning", "small-target", where,
-                                f"target is {n.bbox[2]}x{n.bbox[3]} px and too close to others: under {min_target}x{min_target}, "
-                                f"with no {min_target} px of space around it (WCAG 2.5.8)"))
-        if n.role == "heading" and n.level:
+            if n.role == "image":
+                issues.append(Issue("error", "meaningless-name", where,
+                                    f"the image's text alternative \"{name}\" is a file name or a placeholder, not a description (WCAG failure F30)", "1.1.1"))
+            elif n.role in ("link", "hyperlink") and _in_sentence(n, siblings):
+                issues.append(Issue("info", "meaningless-name", where,
+                                    f"the link \"{name}\" is clear only from the sentence around it: in a list of links it says nothing", "2.4.9"))
+            elif n.role in ("link", "hyperlink"):
+                issues.append(Issue("warning", "meaningless-name", where, f"the link \"{name}\" does not say where it goes", "2.4.4"))
+            else:
+                issues.append(Issue("warning", "meaningless-name", where, f"the name \"{name}\" does not say what this does", "2.4.6"))
+        elif name and _names_its_role(n, name):
+            issues.append(Issue("info", "name-includes-role", where,
+                                f"the name \"{name}\" includes the role, which a screen reader says anyway (\"{name}, {role_word}\")"))
+        if (n.role in INTERACTIVE and n.focusable is False and not hidden and "disabled" not in n.states
+                and n.role not in ("radio", "listitem", "treeitem", "menuitem", "tabitem")
+                and not any(a.role in ARROW_KEYS for a in path)):
+            issues.append(Issue("warning", "keyboard-unreachable", where,
+                                f"this {role_word} cannot take the keyboard focus: someone who cannot use a mouse may not reach it", "2.1.1"))
+        if n in targets and _small_and_crowded(n, targets, size) and not _in_sentence(n, siblings):
+            w, h = round(n.bbox[2] / scale), round(n.bbox[3] / scale)
+            scaled = f" (at {scale:.0%} display scaling)" if scale != 1.0 else ""
+            part = next((a for a in reversed(path) if a.role in PARTS), None)
+            if part:
+                issues.append(Issue("info", "small-target", where,
+                                    f"this part of a {ROLE_WORDS['en'][part.role]} is {w}x{h} px{scaled}, under {min_target}x{min_target}; "
+                                    f"if the platform sets its size, 2.5.8 allows it: check by hand", "2.5.8"))
+            else:
+                issues.append(Issue("warning", "small-target", where,
+                                    f"target is {w}x{h} px{scaled} and too close to others: under {min_target}x{min_target}, "
+                                    f"with no {min_target} px of space around it (WCAG 2.5.8; page zoom is not taken into account)", "2.5.8"))
+        if n.role == "heading" and n.level and not hidden:
             if last_level and n.level > last_level + 1:
-                issues.append(Issue("info", "heading-skip", where, f"heading level {n.level} follows level {last_level}"))
+                issues.append(Issue("info", "heading-skip", where,
+                                    f"heading level {n.level} follows level {last_level}: best practice, not a WCAG failure"))
             last_level = n.level
         # Several controls side by side with the same role and name cannot be told apart by ear.
-        interactive = [c for c in n.children if c.role in INTERACTIVE and c.name.strip() and "offscreen" not in c.states]
-        seen: dict[tuple[str, str], int] = {}
-        for c in interactive:
-            k = (c.role, c.name.strip().lower())
-            seen[k] = seen.get(k, 0) + 1
-        for (role, cname), count in seen.items():
-            if count > 1:
+        seen: dict[tuple[str, str], list[Node]] = {}
+        for c in n.children:
+            if c.role in INTERACTIVE and c.name.strip():
+                seen.setdefault((c.role, c.name.strip().lower()), []).append(c)
+        for (role, cname), same in seen.items():
+            if len(same) > 1:
                 word = ROLE_WORDS["en"].get(role, role)
-                issues.append(Issue("info", "duplicate-name", _path(path, n), f"{count} {_plural(word, count)} named \"{cname}\" side by side cannot be told apart"))
+                tabbable = all(c.focusable for c in same)
+                issues.append(Issue("warning" if tabbable else "info", "duplicate-name", _path(path, n),
+                                    f"{len(same)} {_plural(word, len(same))} named \"{cname}\" side by side cannot be told apart"
+                                    + (" when tabbing through them" if tabbable else ""), "2.4.9" if role in ("link", "hyperlink") else ""))
     order = {"error": 0, "warning": 1, "info": 2}
     return sorted(issues, key=lambda i: order[i.severity])
+
+
+def count_offscreen(root: Node) -> int:
+    return sum(1 for n, p in root.walk() if "offscreen" in n.states and not any("offscreen" in a.states for a in p))

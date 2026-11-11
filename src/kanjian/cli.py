@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from . import __version__
-from .tree import Issue, Node, audit, speak_node, summarize
+from .tree import RULES, Issue, Node, audit, count_offscreen, speak_node, summarize, understanding_url
 
 DEFAULT_VLM_URL = "http://localhost:11434/v1"
 DEFAULT_VLM_MODEL = "qwen2.5vl:3b"
@@ -75,18 +75,34 @@ def read_window(args) -> Read:
 # ---------------------------------------------------------------- output
 
 
+HOME = "https://github.com/zch6a/kanjian"
+
+
 def sarif(issues: list[Issue], window: str) -> dict:
     """SARIF 2.1.0, for code-scanning tools and editors."""
     levels = {"error": "error", "warning": "warning", "info": "note"}
     rules = sorted({i.rule for i in issues})
+
+    def rule(r: str) -> dict:
+        criteria = sorted({i.wcag for i in issues if i.rule == r and i.wcag})
+        tags = ["accessibility", *(f"WCAG {sc}" for sc in criteria)]
+        return {"id": r, "shortDescription": {"text": RULES.get(r, r)}, "helpUri": f"{HOME}#audit-rules",
+                "properties": {"tags": tags if criteria else [*tags, "best-practice"]}}
+
+    def result(i: Issue) -> dict:
+        out = {"ruleId": i.rule, "ruleIndex": rules.index(i.rule), "level": levels[i.severity], "message": {"text": i.message},
+               "locations": [{"logicalLocations": [{"fullyQualifiedName": i.path, "kind": "element"}]}]}
+        if i.wcag:
+            out["properties"] = {"wcag": i.wcag, "helpUri": understanding_url(i.wcag)}
+        return out
+
     return {
         "version": "2.1.0",
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "runs": [{
-            "tool": {"driver": {"name": "kanjian", "version": __version__, "informationUri": "https://github.com/zch6a/kanjian",
-                                "rules": [{"id": r} for r in rules]}},
-            "results": [{"ruleId": i.rule, "level": levels[i.severity], "message": {"text": i.message},
-                         "locations": [{"logicalLocations": [{"fullyQualifiedName": i.path, "kind": "element"}]}]} for i in issues],
+            "tool": {"driver": {"name": "kanjian", "version": __version__, "informationUri": HOME,
+                                "rules": [rule(r) for r in rules]}},
+            "results": [result(i) for i in issues],
             "properties": {"window": window},
         }],
     }
@@ -101,7 +117,7 @@ def print_issues(issues: list[Issue], fmt: str, window: str) -> None:
         if not issues:
             print("No accessibility problems found.")
         for i in issues:
-            print(f"{i.severity:7} {i.rule:21} {i.path}\n        {i.message}")
+            print(f"{i.severity:7} {i.rule:21} {i.path}\n        {i.message}" + (f" [WCAG {i.wcag}]" if i.wcag else ""))
         errors = sum(1 for i in issues if i.severity == "error")
         if issues:
             print(f"\n{len(issues)} problem(s), {errors} error(s)")
@@ -127,6 +143,10 @@ def cmd_audit(args) -> int:
     if r.truncated_at:
         print(f"kanjian: only the first {r.truncated_at} elements were read, so this audit is partial", file=sys.stderr)
     issues = audit(r.window, min_target=args.min_target)
+    hidden = count_offscreen(r.window)
+    if hidden and args.format == "text":
+        print(f"kanjian: {hidden} element(s) are off screen (scrolled away or hidden): their names were checked, "
+              f"their size was not", file=sys.stderr)
     print_issues(issues, args.format, r.window.name)
     return 1 if any(i.severity == "error" for i in issues) else 0
 

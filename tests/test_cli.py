@@ -43,7 +43,8 @@ def test_screen_in_chinese(tree_file, capsys):
 def test_audit_text_json_and_sarif(tree_file, capsys):
     assert cli.main(["audit", "--tree", str(tree_file)]) == 1  # an error: the unlabeled button
     text = capsys.readouterr().out
-    assert "no-name" in text and "meaningless-name" in text and "1 error(s)" in text
+    assert "no-name" in text and "meaningless-name" in text and "2 error(s)" in text  # the button, and an image named "logo.png"
+    assert "[WCAG 1.1.1]" in text and "[WCAG 4.1.2]" in text
     assert cli.main(["audit", "--tree", str(tree_file), "--format", "json"]) == 1
     issues = json.loads(capsys.readouterr().out)
     assert {i["rule"] for i in issues} == {"no-name", "meaningless-name"}
@@ -51,7 +52,23 @@ def test_audit_text_json_and_sarif(tree_file, capsys):
     report = json.loads(capsys.readouterr().out)
     run = report["runs"][0]
     assert report["version"] == "2.1.0" and run["tool"]["driver"]["name"] == "kanjian"
-    assert {r["level"] for r in run["results"]} == {"error", "warning"}
+    assert {r["level"] for r in run["results"]} == {"error"}
+    rules = {r["id"]: r for r in run["tool"]["driver"]["rules"]}
+    assert rules["meaningless-name"]["properties"]["tags"] == ["accessibility", "WCAG 1.1.1"]
+    assert rules["no-name"]["helpUri"].endswith("#audit-rules") and rules["no-name"]["shortDescription"]["text"]
+    image = [r for r in run["results"] if r["ruleId"] == "meaningless-name"][0]
+    assert image["properties"]["helpUri"] == "https://www.w3.org/WAI/WCAG22/Understanding/non-text-content.html"
+    assert run["tool"]["driver"]["rules"][image["ruleIndex"]]["id"] == "meaningless-name"
+
+
+def test_audit_notes_what_is_off_screen(tmp_path, capsys):
+    p = tmp_path / "list.json"
+    p.write_text(json.dumps({"role": "window", "name": "Files", "children": [
+        {"role": "button", "name": "Open", "bbox": [0, 0, 80, 30]},
+        {"role": "button", "name": "", "states": ["offscreen"]}]}), encoding="utf-8")
+    assert cli.main(["audit", "--tree", str(p)]) == 1
+    out, err = capsys.readouterr()
+    assert "(off screen)" in out and "1 element(s) are off screen" in err
 
 
 def test_audit_of_a_clean_window_exits_zero(tmp_path, capsys):

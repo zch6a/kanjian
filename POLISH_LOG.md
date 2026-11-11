@@ -95,3 +95,31 @@ Each output was judged as a screen reader user would: most important first, noth
   - An icon inside an unlabeled button was reported again as an image without a description; the button's error covers it.
 - **CI found a real gap.** GitHub's Windows runners have no audio device, and speaking raised a COM error (`0x8004503A`). On a PC without working audio that would have crashed kanjian. Speech now falls back to printing, once saying why, and the speech-timing test skips where there is no audio device.
 - 71 tests, ruff clean.
+
+## Round 3
+
+Checked against the standards and the screen readers themselves: WCAG 2.2 and its Understanding pages, WCAG2ICT (how WCAG applies to desktop software), the ARIA Authoring Practices, NVDA's spoken words, axe-windows' rules and the UIA documentation. Fifteen findings, all fixed. The two test windows from round 2 were used again to check each change for false positives.
+
+**What the reader gets from UIA**
+- **Every Win32 control said "invalid entry".** `IsDataValidForForm` reads False on plain Win32 controls, so it cannot be trusted. Invalid fields now come from the page's own `aria-invalid`.
+- **Radio buttons never said "not checked".** They have no Toggle pattern: their state is `IsSelected`. They now say "checked" or "not checked", as NVDA does.
+- **Read only** was set on every edit with no Value pattern (UIA's default is TRUE). It is now asked only where there is a Value pattern; sliders and progress bars fall back to their RangeValue.
+- **New from UIA:** keyboard focusability, landmarks (navigation, main, search, form), custom controls' own role names ("rating"), a table's own row and column counts (a virtualized grid holds only the rows on screen), and the window's DPI.
+
+**Wording, as NVDA says it**
+- A table is "4 rows, 3 columns: …": the header row counts, as NVDA counts it.
+- A pressed button is a "toggle button, pressed"; a half-checked box is "half checked"; Chinese uses NVDA's "未标注的" and "错误的输入".
+- Pages now have a **Landmarks** line ("Landmarks: Main, navigation landmark; Search landmark").
+
+**The audit**
+- **Each finding names its WCAG criterion**, and the severity follows what it breaks: an image named "IMG_2041.JPG" is an error (1.1.1, failure F30); "click here" in a sentence is info (2.4.9, since 2.4.4 lets the sentence explain it), alone it is a warning (2.4.4).
+- **Target size is in effective pixels.** At 150% scaling a 30 px button is 20 effective pixels: it was passed before, and is flagged now. Page zoom is not taken into account, and the message says so. Links in a sentence are exempt, as 2.5.8 says.
+- **A spin box's arrows** are info, "check by hand": WCAG2ICT reads the user-agent exception as covering sizes the platform sets. A combo box's arrow and a slider's thumb are still part of one target.
+- **New rules:** `keyboard-unreachable` (2.1.1; arrow-key containers left out), `class-like-name`, `name-includes-role`, and `no-name` for custom controls, lists and tables that take the focus. Testing found that Win32's proxy calls every child window focusable (a PictureBox showed as a focusable, unnamed pane), so plain panes and groups count only on web pages.
+- **Off-screen elements** are checked for names, because a screen reader reaches them, but not for size. The CLI says how many there were.
+- `duplicate-name` is a warning when the controls are in the tab order. `heading-skip` says it is best practice, not a WCAG failure.
+- **SARIF** rules carry a description, tags (`WCAG 1.1.1`, `best-practice`) and a help link; results carry the criterion and the W3C page that explains it.
+- **README**: an audit-rules table, and what the audit cannot tell you. UIA sees a web page through the browser, so for web content it points to axe-core.
+
+- **Test fix**: a stand-in vision server swapped its handler after its thread had started, which could race. It now gets its status and body when it is made.
+- 78 tests, ruff clean.
