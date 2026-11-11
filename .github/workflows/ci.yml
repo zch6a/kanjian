@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # setup-uv with python-version creates and activates .venv. On Windows the tests also read a real
+      # window (one they open themselves) through UI Automation, and speak to a WAV file.
+      - run: uv pip install -e ".[windows]" pytest ruff
+      - run: uv run --no-project kanjian --version
+      - run: uv run --no-project ruff check src tests
+      - run: uv run --no-project pytest -q
