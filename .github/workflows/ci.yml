@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+# Read-only: tests need no write access.
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:
@@ -13,8 +17,10 @@ jobs:
         python: ["3.10", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           python-version: ${{ matrix.python }}
       # setup-uv with python-version creates and activates .venv. On Windows the tests also read a real
